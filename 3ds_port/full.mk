@@ -211,8 +211,14 @@ CTR_GBA_BATTLE_SRCS := battle_main battle_bg battle_intro battle_interface battl
 	$(patsubst $(ROOT)/src/%.c,%,$(wildcard $(ROOT)/src/battle_anim*.c))
 CTR_GBA_BATTLE_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_BATTLE_SRCS))
 CTR_GBA_TRANSITION_OBJS := build/root/src/battle_transition.o
+# Screens staged as one whole GBA picture (compat/ctr_gba_stage.h): their edge
+# carried out and faded into black, as Emerald's intro and title screen.
+CTR_GBA_STAGE_OBJS := $(patsubst %,build/root/src/%.o,intro title_screen credits)
+$(CTR_GBA_STAGE_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_stage.h)
+$(CTR_GBA_STAGE_OBJS): compat/ctr_gba_stage.h $(ROOT)/include/gba/defines.h
 # main.c defines SetVBlankCallback, which the stage headers rename.
-CTR_GBA_CENTRED_OBJS := $(filter-out $(CTR_GBA_BATTLE_OBJS) $(CTR_GBA_TRANSITION_OBJS) build/root/src/main.o,$(FULL_C_OBJS))
+CTR_GBA_CENTRED_OBJS := $(filter-out $(CTR_GBA_BATTLE_OBJS) $(CTR_GBA_TRANSITION_OBJS) $(CTR_GBA_STAGE_OBJS) \
+	build/root/src/main.o,$(FULL_C_OBJS))
 $(CTR_GBA_BATTLE_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_battle.h)
 $(CTR_GBA_BATTLE_OBJS): compat/ctr_gba_battle.h $(ROOT)/include/gba/defines.h
 $(CTR_GBA_TRANSITION_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_transition.h)
