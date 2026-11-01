@@ -337,6 +337,37 @@ index 3930f68..b7ed768 100644
  void SetGpuReg_ForcedBlank(u8 regOffset, u16 value);
  u16 GetGpuReg(u8 regOffset);
  void SetGpuRegBits(u8 regOffset, u16 mask);
+diff --git a/include/load_save.h b/include/load_save.h
+index 95de991..0fe1767 100644
+--- a/include/load_save.h
++++ b/include/load_save.h
+@@ -4,9 +4,26 @@
+ #include "global.h"
+ 
+ extern bool32 gFlashMemoryPresent;
++#ifdef PORTABLE
++#include "pokemon_storage_system.h"
++// Each save block with the room it moves within (SetSaveBlocksPointers), as
++// one object: the GBA's linker script keeps a block and its _DMA array side by
++// side, a native linker does not, and the block then ran into its neighbour.
++#define SAVEBLOCK_MOVE_RANGE 128
++struct SaveBlock1Area { struct SaveBlock1 block; u8 moveRange[SAVEBLOCK_MOVE_RANGE]; };
++struct SaveBlock2Area { struct SaveBlock2 block; u8 moveRange[SAVEBLOCK_MOVE_RANGE]; };
++struct PokemonStorageArea { struct PokemonStorage block; u8 moveRange[SAVEBLOCK_MOVE_RANGE]; };
++extern struct SaveBlock1Area gSaveBlock1Area;
++extern struct SaveBlock2Area gSaveBlock2Area;
++extern struct PokemonStorageArea gPokemonStorageArea;
++#define gSaveBlock1 (gSaveBlock1Area.block)
++#define gSaveBlock2 (gSaveBlock2Area.block)
++#define gPokemonStorage (gPokemonStorageArea.block)
++#else
+ extern struct SaveBlock1 gSaveBlock1;
+ extern struct SaveBlock2 gSaveBlock2;
+ extern struct PokemonStorage gPokemonStorage;
++#endif
+ 
+ void ClearSav2(void);
+ void ClearSav1(void);
 diff --git a/include/malloc.h b/include/malloc.h
 index bf89bad..149651e 100644
 --- a/include/malloc.h
@@ -1280,10 +1311,42 @@ index 6d62084..3b9de56 100644
  
  static const u8 *GetIntroSpeechOfApproachingTrainer(void)
 diff --git a/src/battle_transition.c b/src/battle_transition.c
-index 8a23dfe..5a6ac76 100644
+index 8a23dfe..8dbde32 100644
 --- a/src/battle_transition.c
 +++ b/src/battle_transition.c
-@@ -655,7 +655,7 @@ static void Task_BattleTransition(u8 taskId)
+@@ -17,6 +17,9 @@
+ #include "scanline_effect.h"
+ #include "event_object_movement.h"
+ #include "constants/songs.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define PALTAG_UNUSED_MUGSHOT 0x100A
+ 
+@@ -215,6 +218,21 @@ static const u8 sUnusedBrendan_Gfx[] = INCBIN_U8("graphics/battle_transitions/un
+ static const u8 sUnusedLass_Gfx[] = INCBIN_U8("graphics/battle_transitions/unused_lass.4bpp");
+ static const u32 sGridSquare_Gfx[] = INCBIN_U32("graphics/battle_transitions/grid_square.4bpp");
+ 
++#ifdef PORT_BRIDGE
++// The INCBINs are link-time stubs: sizeof() is the stub's, so the asset sizes
++// are spelled out, as Emerald 3DS's battle_transition.c does.
++#define BIG_POKEBALL_GFX_SIZE        0x580 // big_pokeball.4bpp
++#define SLIDING_POKEBALL_TILEMAP_SIZE 0x40 // sliding_pokeball.bin
++#define MUGSHOT_BANNER_GFX_SIZE      0x1E0 // mugshot_banner.4bpp
++#define GRID_SQUARE_GFX_SIZE         0x1E0 // grid_square.4bpp
++#define BIG_POKEBALL_TILEMAP_SIZE    0x4B0 // big_pokeball_tilemap.bin
++#define MUGSHOTS_TILEMAP_SIZE        0x500 // vsbar_tilemap.bin
++#else
++#define BIG_POKEBALL_GFX_SIZE        sizeof(sBigPokeball_Gfx)
++#define SLIDING_POKEBALL_TILEMAP_SIZE sizeof(sSlidingPokeball_Tilemap)
++#define MUGSHOT_BANNER_GFX_SIZE      sizeof(sMugshotBanner_Gfx)
++#endif
++
+ // All battle transitions use the same intro
+ static const TaskFunc sTasks_Intro[] =
+ {
+@@ -655,7 +673,7 @@ static void Task_BattleTransition(u8 taskId)
  static bool8 Transition_StartIntro(struct Task *task)
  {
      SetWeatherScreenFadeOut();
@@ -1292,7 +1355,7 @@ index 8a23dfe..5a6ac76 100644
      if (sTasks_Intro[task->tTransitionId] != NULL)
      {
          CreateTask(sTasks_Intro[task->tTransitionId], 4);
-@@ -693,7 +693,12 @@ static bool8 Transition_WaitForMain(struct Task *task)
+@@ -693,7 +711,12 @@ static bool8 Transition_WaitForMain(struct Task *task)
  {
      task->tTransitionDone = FALSE;
      if (FindTaskIdByFunc(sTasks_Main[task->tTransitionId]) == TASK_NONE)
@@ -1305,6 +1368,59 @@ index 8a23dfe..5a6ac76 100644
      return FALSE;
  }
  
+@@ -936,7 +959,7 @@ static bool8 BigPokeball_Init(struct Task *task)
+     InitPatternWeaveTransition(task);
+     GetBg0TilesDst(&tilemap, &tileset);
+     CpuFill16(0, tilemap, BG_SCREEN_SIZE);
+-    CpuCopy16(sBigPokeball_Gfx, tileset, sizeof(sBigPokeball_Gfx));
++    CpuCopy16(sBigPokeball_Gfx, tileset, BIG_POKEBALL_GFX_SIZE);
+     LoadPalette(sFieldEffectPal_Pokeball, BG_PLTT_ID(15), sizeof(sFieldEffectPal_Pokeball));
+     task->tState++;
+     return FALSE;
+@@ -948,6 +971,9 @@ static bool8 BigPokeball_SetGfx(struct Task *task)
+     u16 *tilemap, *tileset;
+     const u16 *bigPokeballMap = sBigPokeball_Tilemap;
+ 
++#ifdef PORT_BRIDGE
++    bigPokeballMap = Port_ResolveAssetPointerSized(sBigPokeball_Tilemap, BIG_POKEBALL_TILEMAP_SIZE);
++#endif
+     GetBg0TilesDst(&tilemap, &tileset);
+     for (i = 0; i < 20; i++)
+         for (j = 0; j < 30; j++, bigPokeballMap++)
+@@ -1106,7 +1132,7 @@ static bool8 PokeballsTrail_Init(struct Task *task)
+     u16 *tilemap, *tileset;
+ 
+     GetBg0TilesDst(&tilemap, &tileset);
+-    CpuCopy16(sSlidingPokeball_Tilemap, tileset, sizeof(sSlidingPokeball_Tilemap));
++    CpuCopy16(sSlidingPokeball_Tilemap, tileset, SLIDING_POKEBALL_TILEMAP_SIZE);
+     CpuFill32(0, tilemap, BG_SCREEN_SIZE);
+     LoadPalette(sFieldEffectPal_Pokeball, BG_PLTT_ID(15), sizeof(sFieldEffectPal_Pokeball));
+     task->tState++;
+@@ -1908,8 +1934,11 @@ static bool8 Mugshot_SetGfx(struct Task *task)
+     u16 *tilemap, *tileset;
+     const u16 *mugshotsMap = sMugshotsTilemap;
+     
++#ifdef PORT_BRIDGE
++    mugshotsMap = Port_ResolveAssetPointerSized(sMugshotsTilemap, MUGSHOTS_TILEMAP_SIZE);
++#endif
+     GetBg0TilesDst(&tilemap, &tileset);
+-    CpuCopy16(sMugshotBanner_Gfx, tileset, sizeof(sMugshotBanner_Gfx));
++    CpuCopy16(sMugshotBanner_Gfx, tileset, MUGSHOT_BANNER_GFX_SIZE);
+     LoadPalette(sOpponentMugshotsPals[task->tMugshotId], BG_PLTT_ID(15), PLTT_SIZE_4BPP);
+     LoadPalette(sPlayerMugshotsPals[gSaveBlock2Ptr->playerGender], BG_PLTT_ID(15) + 10, PLTT_SIZEOF(16 - 10));
+     
+@@ -2606,7 +2635,11 @@ static bool8 GridSquares_Main(struct Task *task)
+         GetBg0TilemapDst(&tileset);
+         task->tDelay = 3;
+         task->tShrinkStage++;
++#ifdef PORT_BRIDGE
++        CpuCopy16((const u32 *)Port_ResolveAssetPointerSized(sGridSquare_Gfx, GRID_SQUARE_GFX_SIZE) + task->tShrinkStage * 8, tileset, 0x20);
++#else
+         CpuCopy16(&sGridSquare_Gfx[task->tShrinkStage * 8], tileset, 0x20);
++#endif
+         if (task->tShrinkStage > 13)
+         {
+             task->tState++;
 diff --git a/src/bg.c b/src/bg.c
 index aa11ae0..6e1801a 100644
 --- a/src/bg.c
@@ -1462,6 +1578,34 @@ index 969f899..524b125 100644
      palOffsetBits = (u32)(paletteOffset << 0x1C) >> 0x18;
      colorKeyBits = (u32)(colorKey << 0x1C) >> 0x18;
  
+diff --git a/src/braille_text.c b/src/braille_text.c
+index d4afdf8..006a59f 100644
+--- a/src/braille_text.c
++++ b/src/braille_text.c
+@@ -3,6 +3,9 @@
+ #include "window.h"
+ #include "text.h"
+ #include "sound.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ // This file handles the braille font.
+ // For printing braille messages, see ScrCmd_braillemessage
+@@ -197,7 +200,13 @@ static void DecompressGlyph_Braille(u16 glyph)
+ {
+     const u16 *glyphs;
+ 
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: index into the resolved font, as Emerald 3DS's braille.c.
++    glyphs = Port_ResolveAssetPointer(sBrailleGlyphs);
++    glyphs += 0x100 * (glyph / 8) + 0x10 * (glyph % 8);
++#else
+     glyphs = sBrailleGlyphs + 0x100 * (glyph / 8) + 0x10 * (glyph % 8);
++#endif
+     DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
+     DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
+     DecompressGlyphTile(glyphs + 0x80, (u16 *)(gGlyphInfo.pixels + 0x40));
 diff --git a/src/data.c b/src/data.c
 index 498f281..d463752 100644
 --- a/src/data.c
@@ -1593,8 +1737,56 @@ index 498f281..d463752 100644
  };
  
  static const union AnimCmd sAnim_GeneralFrame0[] =
+diff --git a/src/decompress.c b/src/decompress.c
+index f4740f9..c284718 100644
+--- a/src/decompress.c
++++ b/src/decompress.c
+@@ -2,6 +2,9 @@
+ #include "gflib.h"
+ #include "decompress.h"
+ #include "pokemon.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ extern const struct CompressedSpriteSheet gMonFrontPicTable[];
+ extern const struct CompressedSpriteSheet gMonBackPicTable[];
+@@ -265,7 +268,7 @@ bool8 LoadCompressedSpriteSheetUsingHeap(const struct CompressedSpriteSheet* src
+     struct SpriteSheet dest;
+     void *buffer;
+ 
+-    buffer = AllocZeroed(*((u32 *)src->data) >> 8);
++    buffer = AllocZeroed(GetDecompressedDataSize((const u8 *)src->data));
+     if (!buffer)
+         return TRUE;
+     LZ77UnCompWram(src->data, buffer);
+@@ -282,7 +285,7 @@ bool8 LoadCompressedSpritePaletteUsingHeap(const struct CompressedSpritePalette
+     struct SpritePalette dest;
+     void *buffer;
+ 
+-    buffer = AllocZeroed(*((u32 *)src->data) >> 8);
++    buffer = AllocZeroed(GetDecompressedDataSize((const u8 *)src->data));
+     if (!buffer)
+         return TRUE;
+     LZ77UnCompWram(src->data, buffer);
+@@ -295,6 +298,15 @@ bool8 LoadCompressedSpritePaletteUsingHeap(const struct CompressedSpritePalette
+ 
+ u32 GetDecompressedDataSize(const u8 *ptr)
+ {
++#ifdef PORT_BRIDGE
++    // An INCBIN is a link-time stub: the LZ77 header is read from the asset.
++    if (Port_IsAssetStub(ptr))
++    {
++        u32 size = Port_GetDecompressedAssetSize(ptr);
++        if (size != 0)
++            return size;
++    }
++#endif
+     u32 ptr32[1];
+     u8 *ptr8 = (u8 *)ptr32;
+ 
 diff --git a/src/dma3_manager.c b/src/dma3_manager.c
-index a3a2374..413bed3 100644
+index a3a2374..0c5b562 100644
 --- a/src/dma3_manager.c
 +++ b/src/dma3_manager.c
 @@ -1,6 +1,10 @@
@@ -1631,6 +1823,17 @@ index a3a2374..413bed3 100644
  
          switch (gDma3Requests[gDma3RequestCursor].mode)
          {
+@@ -92,6 +99,10 @@ s16 RequestDma3Copy(const void *src, void *dest, u16 size, u8 mode)
+     int cursor;
+     int var = 0;
+ 
++#ifdef PORT_BRIDGE
++    src = Port_ResolveAssetPointerSized(src, size);
++#endif
++
+     gDma3ManagerLocked = 1;
+ 
+     cursor = gDma3RequestCursor;
 diff --git a/src/dodrio_berry_picking.c b/src/dodrio_berry_picking.c
 index a337147..dbfc0aa 100644
 --- a/src/dodrio_berry_picking.c
@@ -2055,6 +2258,74 @@ index 8e82824..01df380 100644
          objectEvent->hasShadow = TRUE;
          StartFieldEffectForObjectEvent(FLDEFF_SHADOW, objectEvent);
      }
+diff --git a/src/evolution_scene.c b/src/evolution_scene.c
+index 442aa15..85f13d8 100644
+--- a/src/evolution_scene.c
++++ b/src/evolution_scene.c
+@@ -26,6 +26,9 @@
+ #include "constants/songs.h"
+ #include "constants/pokemon.h"
+ #include "constants/items.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ extern struct Evolution gEvolutionTable[][EVOS_PER_MON];
+ 
+@@ -1613,12 +1616,18 @@ static void Task_AnimateBg(u8 taskId)
+ static void InitMovingBgPalette(u16 *palette)
+ {
+     s32 i, j;
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: read the colors from the asset, as Emerald 3DS does.
++    const u16 *bgAnimPal = Port_ResolveAssetPointerSized(sBgAnim_Pal, 0x40);
++#else
++    const u16 *bgAnimPal = sBgAnim_Pal;
++#endif
+ 
+     for (i = 0; i < (int)ARRAY_COUNT(sBgAnim_PalIndexes); i++)
+     {
+         for (j = 0; j < 16; j++)
+         {
+-            palette[i * 16 + j] = sBgAnim_Pal[sBgAnim_PalIndexes[i][j]];
++            palette[i * 16 + j] = bgAnimPal[sBgAnim_PalIndexes[i][j]];
+         }
+     }
+ }
+diff --git a/src/fame_checker.c b/src/fame_checker.c
+index b39771a..e034408 100644
+--- a/src/fame_checker.c
++++ b/src/fame_checker.c
+@@ -19,6 +19,9 @@
+ #include "fame_checker.h"
+ #include "strings.h"
+ #include "constants/event_objects.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define SPRITETAG_SELECTOR_CURSOR 1000
+ #define SPRITETAG_QUESTION_MARK 1001
+@@ -661,10 +664,19 @@ static void MainCB2_LoadFameChecker(void)
+             gMain.state++;
+             break;
+         case 3:
++#ifdef PORT_BRIDGE
++            // The INCBINs are stubs: sizeof() is the stub's, and a row of the
++            // palette is an offset into the asset.
++            LoadBgTiles(3, gFameCheckerBgTiles, Port_GetAssetSizeExact(gFameCheckerBgTiles), 0);
++            CopyToBgTilemapBufferRect(3, gFameCheckerBg3Tilemap, 0, 0, 32, 32);
++            LoadPaletteWithOffset(gFameCheckerBgPals, 0, BG_PLTT_ID(0), 2 * PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gFameCheckerBgPals, PLTT_SIZE_4BPP, BG_PLTT_ID(1), PLTT_SIZE_4BPP);
++#else
+             LoadBgTiles(3, gFameCheckerBgTiles, sizeof(gFameCheckerBgTiles), 0);
+             CopyToBgTilemapBufferRect(3, gFameCheckerBg3Tilemap, 0, 0, 32, 32);
+             LoadPalette(&gFameCheckerBgPals[0], BG_PLTT_ID(0), 2 * PLTT_SIZE_4BPP);
+             LoadPalette(&gFameCheckerBgPals[1], BG_PLTT_ID(1), PLTT_SIZE_4BPP);
++#endif
+             CopyToBgTilemapBufferRect(2, gFameCheckerBg2Tilemap, 0, 0, 32, 32);
+             CopyToBgTilemapBufferRect_ChangePalette(1, sFameCheckerTilemap, 30, 0, 32, 32, 0x11);
+             LoadPalette(GetTextWindowPalette(2), BG_PLTT_ID(15), PLTT_SIZE_4BPP);
 diff --git a/src/field_camera.c b/src/field_camera.c
 index 88f94bf..327b874 100644
 --- a/src/field_camera.c
@@ -2852,7 +3123,7 @@ index 88f94bf..327b874 100644
  
  static void CameraPanningCB_PanAhead(void)
 diff --git a/src/field_door.c b/src/field_door.c
-index c3be102..2018fe3 100644
+index c3be102..621532c 100644
 --- a/src/field_door.c
 +++ b/src/field_door.c
 @@ -5,6 +5,9 @@
@@ -2865,7 +3136,21 @@ index c3be102..2018fe3 100644
  
  enum {
      DOOR_SOUND_NORMAL,
-@@ -434,7 +437,9 @@ static s8 StartDoorAnimationTask(const struct DoorGraphics *gfx, const struct Do
+@@ -293,7 +296,13 @@ static void DrawDoor(const struct DoorGraphics *gfx, const struct DoorAnimFrame
+         DrawClosedDoorTiles(gfx, x, y);
+     else
+     {
++#ifdef PORT_BRIDGE
++        // Resolve the exact INCBIN base before applying the frame's byte offset
++        // (as Emerald 3DS's CopyDoorTilesToVram).
++        CopyDoorTilesToVram((const u8 *)Port_ResolveAssetPointer(gfx->tiles) + frames->tileOffset);
++#else
+         CopyDoorTilesToVram(&gfx->tiles[frames->tileOffset]);
++#endif
+         DrawCurrentDoorAnimFrame(gfx, x, y, gfx->paletteNums);
+     }
+ }
+@@ -434,7 +443,9 @@ static s8 StartDoorAnimationTask(const struct DoorGraphics *gfx, const struct Do
  
  static void DrawClosedDoor(const struct DoorGraphics *gfx, int x, int y)
  {
@@ -2877,7 +3162,7 @@ index c3be102..2018fe3 100644
  
  static void DrawOpenedDoor(const struct DoorGraphics *gfx, int x, int y)
 diff --git a/src/field_effect.c b/src/field_effect.c
-index 1707cbd..bc25529 100644
+index 1707cbd..ede9201 100644
 --- a/src/field_effect.c
 +++ b/src/field_effect.c
 @@ -28,6 +28,12 @@
@@ -2893,7 +3178,34 @@ index 1707cbd..bc25529 100644
  
  extern struct CompressedSpritePalette gMonPaletteTable[]; // Intentionally declared (incorrectly) without const in order to match
  extern const struct CompressedSpritePalette gTrainerFrontPicPaletteTable[];
-@@ -359,7 +365,14 @@ u32 FieldEffectStart(u8 fldeff)
+@@ -198,17 +204,18 @@ static const struct SpriteFrameImage sPicTable_PokeballGlow[] = {
+ };
+ 
+ static const struct SpriteFrameImage sPicTable_PokecenterMonitor[] = {
+-    {sPokecenterMonitor_Gfx + 0x000, 0x100},
+-    {sPokecenterMonitor_Gfx + 0x080, 0x100},
+-    {sPokecenterMonitor_Gfx + 0x100, 0x100},
+-    {sPokecenterMonitor_Gfx + 0x180, 0x100}
++    // Port: base and offset kept apart (an offset into an INCBIN stub is not the asset).
++    sprite_frame(sPokecenterMonitor_Gfx, 0x100, 0),
++    sprite_frame(sPokecenterMonitor_Gfx, 0x100, 1),
++    sprite_frame(sPokecenterMonitor_Gfx, 0x100, 2),
++    sprite_frame(sPokecenterMonitor_Gfx, 0x100, 3)
+ };
+ 
+ static const struct SpriteFrameImage sPicTable_HofMonitor[] = {
+-    {sHofMonitor_Gfx + 0x00, 0x80},
+-    {sHofMonitor_Gfx + 0x40, 0x80},
+-    {sHofMonitor_Gfx + 0x80, 0x80},
+-    {sHofMonitor_Gfx + 0xC0, 0x80}
++    sprite_frame(sHofMonitor_Gfx, 0x80, 0),
++    sprite_frame(sHofMonitor_Gfx, 0x80, 1),
++    sprite_frame(sHofMonitor_Gfx, 0x80, 2),
++    sprite_frame(sHofMonitor_Gfx, 0x80, 3)
+ };
+ 
+ // Unused, leftover from RSE
+@@ -359,7 +366,14 @@ u32 FieldEffectStart(u8 fldeff)
      const u8 *script;
      u32 result;
      FieldEffectActiveListAdd(fldeff);
@@ -2908,7 +3220,7 @@ index 1707cbd..bc25529 100644
      while (sFldEffScrcmdTable[*script](&script, &result))
          ;
      return result;
-@@ -430,6 +443,9 @@ static u32 FieldEffectScript_ReadWord(const u8 **script)
+@@ -430,6 +444,9 @@ static u32 FieldEffectScript_ReadWord(const u8 **script)
  static void FieldEffectScript_LoadTiles(const u8 **script)
  {
      const struct SpriteSheet * spriteSheet = (const struct SpriteSheet * )FieldEffectScript_ReadWord(script);
@@ -2918,7 +3230,7 @@ index 1707cbd..bc25529 100644
      if (GetSpriteTileStartByTag(spriteSheet->tag) == 0xFFFF)
          LoadSpriteSheet(spriteSheet);
      *script += sizeof(u32);
-@@ -460,7 +476,11 @@ void ApplyGlobalFieldPaletteTint(u8 paletteIdx)
+@@ -460,7 +477,11 @@ void ApplyGlobalFieldPaletteTint(u8 paletteIdx)
  static void FieldEffectScript_LoadFadedPal(const u8 **script)
  {
      const struct SpritePalette * spritePalette = (const struct SpritePalette * )FieldEffectScript_ReadWord(script);
@@ -2931,7 +3243,7 @@ index 1707cbd..bc25529 100644
      LoadSpritePalette(spritePalette);
      if (idx == 0xFF)
          ApplyGlobalFieldPaletteTint(IndexOfSpritePaletteTag(spritePalette->tag));
-@@ -471,7 +491,11 @@ static void FieldEffectScript_LoadFadedPal(const u8 **script)
+@@ -471,7 +492,11 @@ static void FieldEffectScript_LoadFadedPal(const u8 **script)
  static void FieldEffectScript_LoadPal(const u8 **script)
  {
      const struct SpritePalette * spritePalette = (const struct SpritePalette * )FieldEffectScript_ReadWord(script);
@@ -2944,7 +3256,7 @@ index 1707cbd..bc25529 100644
      LoadSpritePalette(spritePalette);
      if (idx != 0xFF)
          ApplyGlobalFieldPaletteTint(IndexOfSpritePaletteTag(spritePalette->tag));
-@@ -588,7 +612,13 @@ u8 CreateTrainerSprite(u8 trainerSpriteID, s16 x, s16 y, u8 subpriority, u8 *buf
+@@ -588,7 +613,13 @@ u8 CreateTrainerSprite(u8 trainerSpriteID, s16 x, s16 y, u8 subpriority, u8 *buf
      spriteTemplate.images = NULL;
      spriteTemplate.affineAnims = gDummySpriteAffineAnimTable;
      spriteTemplate.callback = SpriteCallbackDummy;
@@ -2959,7 +3271,7 @@ index 1707cbd..bc25529 100644
  }
  
  // Unused
-@@ -1057,6 +1087,49 @@ static void SpriteCB_HallOfFameMonitor(struct Sprite *sprite)
+@@ -1057,6 +1088,49 @@ static void SpriteCB_HallOfFameMonitor(struct Sprite *sprite)
          FieldEffectFreeGraphicsResources(sprite);
  }
  
@@ -3009,7 +3321,7 @@ index 1707cbd..bc25529 100644
  static void FieldCallback_UseFly(void);
  static void Task_UseFly(u8 taskId);
  static void FieldCallback_FlyIntoMap(void);
-@@ -2598,6 +2671,30 @@ u32 FldEff_FieldMoveShowMonInit(void)
+@@ -2598,6 +2672,30 @@ u32 FldEff_FieldMoveShowMonInit(void)
      return 0;
  }
  
@@ -3040,7 +3352,7 @@ index 1707cbd..bc25529 100644
  static void Task_ShowMon_Outdoors(u8 taskId)
  {
      sShowMonOutdoorsEffectFuncs[gTasks[taskId].data[0]](&gTasks[taskId]);
-@@ -2608,8 +2705,9 @@ static void ShowMonEffect_Outdoors_1(struct Task *task)
+@@ -2608,8 +2706,9 @@ static void ShowMonEffect_Outdoors_1(struct Task *task)
      task->data[11] = GetGpuReg(REG_OFFSET_WININ);
      task->data[12] = GetGpuReg(REG_OFFSET_WINOUT);
      StoreWordInTwoHalfwords((u16 *)&task->data[13], (u32)gMain.vblankCallback);
@@ -3052,7 +3364,7 @@ index 1707cbd..bc25529 100644
      task->data[3] = WININ_WIN0_BG_ALL | WININ_WIN0_OBJ | WININ_WIN0_CLR;
      task->data[4] = WINOUT_WIN01_BG1 | WINOUT_WIN01_BG2 | WINOUT_WIN01_BG3 | WINOUT_WIN01_OBJ | WINOUT_WIN01_CLR;
      SetGpuReg(REG_OFFSET_WIN0H, task->data[1]);
-@@ -2617,6 +2715,9 @@ static void ShowMonEffect_Outdoors_1(struct Task *task)
+@@ -2617,6 +2716,9 @@ static void ShowMonEffect_Outdoors_1(struct Task *task)
      SetGpuReg(REG_OFFSET_WININ, task->data[3]);
      SetGpuReg(REG_OFFSET_WINOUT, task->data[4]);
      SetVBlankCallback(VBlankCB_ShowMonEffect_Outdoors);
@@ -3062,7 +3374,7 @@ index 1707cbd..bc25529 100644
      task->data[0]++;
  }
  
-@@ -2647,17 +2748,17 @@ static void ShowMonEffect_Outdoors_3(struct Task *task)
+@@ -2647,17 +2749,17 @@ static void ShowMonEffect_Outdoors_3(struct Task *task)
      {
          win0h_lo = 0;
      }
@@ -3085,7 +3397,7 @@ index 1707cbd..bc25529 100644
      {
          gSprites[task->data[15]].callback = SpriteCB_FieldMoveMonSlideOnscreen;
          task->data[0]++;
-@@ -2682,16 +2783,16 @@ static void ShowMonEffect_Outdoors_5(struct Task *task)
+@@ -2682,16 +2784,16 @@ static void ShowMonEffect_Outdoors_5(struct Task *task)
      win0v_hi = (task->data[2] & 0xff);
      win0v_lo += 6;
      win0v_hi -= 6;
@@ -3107,7 +3419,7 @@ index 1707cbd..bc25529 100644
      {
          task->data[0]++;
      }
-@@ -2701,8 +2802,8 @@ static void ShowMonEffect_Outdoors_6(struct Task *task)
+@@ -2701,8 +2803,8 @@ static void ShowMonEffect_Outdoors_6(struct Task *task)
  {
      u16 bg0cnt = (GetGpuReg(REG_OFFSET_BG0CNT) >> 8) << 11;
      CpuFill32(0, (void *)VRAM + bg0cnt, 0x800);
@@ -3118,7 +3430,7 @@ index 1707cbd..bc25529 100644
      task->data[3] = task->data[11];
      task->data[4] = task->data[12];
      task->data[0]++;
-@@ -2716,6 +2817,9 @@ static void ShowMonEffect_Outdoors_7(struct Task *task)
+@@ -2716,6 +2818,9 @@ static void ShowMonEffect_Outdoors_7(struct Task *task)
      ChangeBgX(0, 0, 0);
      ChangeBgY(0, 0, 0);
      Menu_LoadStdPal();
@@ -3128,7 +3440,7 @@ index 1707cbd..bc25529 100644
      FreeResourcesAndDestroySprite(&gSprites[task->data[15]], task->data[15]);
      FieldEffectActiveListRemove(FLDEFF_FIELD_MOVE_SHOW_MON);
      DestroyTask(FindTaskIdByFunc(Task_ShowMon_Outdoors));
-@@ -2739,9 +2843,15 @@ static void LoadFieldMoveStreaksTilemapToVram(u16 screenbase)
+@@ -2739,9 +2844,15 @@ static void LoadFieldMoveStreaksTilemapToVram(u16 screenbase)
  {
      u16 i;
      u16 *dest;
@@ -3145,7 +3457,7 @@ index 1707cbd..bc25529 100644
  }
  
  static void (*const sShowMonIndoorsEffectFuncs[])(struct Task *) = {
-@@ -2761,10 +2871,16 @@ static void Task_ShowMon_Indoors(u8 taskId)
+@@ -2761,10 +2872,16 @@ static void Task_ShowMon_Indoors(u8 taskId)
  
  static void ShowMonEffect_Indoors_1(struct Task *task)
  {
@@ -3162,7 +3474,7 @@ index 1707cbd..bc25529 100644
      task->data[0]++;
  }
  
-@@ -2787,8 +2903,8 @@ static void ShowMonEffect_Indoors_3(struct Task *task)
+@@ -2787,8 +2904,8 @@ static void ShowMonEffect_Indoors_3(struct Task *task)
      {
          task->data[5] = GetGpuReg(REG_OFFSET_WININ);
          SetGpuReg(REG_OFFSET_WININ, (task->data[5] & 0xFF) | WININ_WIN1_BG0 | WININ_WIN1_OBJ);
@@ -3173,7 +3485,7 @@ index 1707cbd..bc25529 100644
          gSprites[task->data[15]].callback = SpriteCB_FieldMoveMonSlideOnscreen;
          task->data[0]++;
      }
-@@ -2835,6 +2951,9 @@ static void ShowMonEffect_Indoors_7(struct Task *task)
+@@ -2835,6 +2952,9 @@ static void ShowMonEffect_Indoors_7(struct Task *task)
      ChangeBgX(0, 0, 0);
      ChangeBgY(0, 0, 0);
      Menu_LoadStdPal();
@@ -3183,7 +3495,7 @@ index 1707cbd..bc25529 100644
      FreeResourcesAndDestroySprite(&gSprites[task->data[15]], task->data[15]);
      FieldEffectActiveListRemove(FLDEFF_FIELD_MOVE_SHOW_MON);
      DestroyTask(FindTaskIdByFunc(Task_ShowMon_Indoors));
-@@ -2863,6 +2982,11 @@ static bool8 SlideIndoorBannerOnscreen(struct Task *task)
+@@ -2863,6 +2983,11 @@ static bool8 SlideIndoorBannerOnscreen(struct Task *task)
      u16 srcOffs;
      u16 dstOffs;
      u16 *dest;
@@ -3195,7 +3507,7 @@ index 1707cbd..bc25529 100644
      if (task->data[4] >= 32)
      {
          return TRUE;
-@@ -2875,10 +2999,10 @@ static bool8 SlideIndoorBannerOnscreen(struct Task *task)
+@@ -2875,10 +3000,10 @@ static bool8 SlideIndoorBannerOnscreen(struct Task *task)
          dest = (u16 *)(VRAM + 0x140 + (u16)task->data[12]);
          for (i = 0; i < 10; i++)
          {
@@ -3208,7 +3520,7 @@ index 1707cbd..bc25529 100644
              dest[((dstOffs + 1) & 0x1f) + i * 32] |= 0xf000;
          }
          task->data[4] += 2;
-@@ -2917,7 +3041,7 @@ static u8 InitFieldMoveMonSprite(u32 species, u32 otId, u32 personality)
+@@ -2917,7 +3042,7 @@ static u8 InitFieldMoveMonSprite(u32 species, u32 otId, u32 personality)
      struct Sprite *sprite;
      playCry = (species & 0x80000000) >> 16;
      species &= 0x7fffffff;
@@ -3217,7 +3529,7 @@ index 1707cbd..bc25529 100644
      sprite = &gSprites[monSprite];
      sprite->callback = SpriteCallbackDummy;
      sprite->oam.priority = 0;
-@@ -2928,9 +3052,9 @@ static u8 InitFieldMoveMonSprite(u32 species, u32 otId, u32 personality)
+@@ -2928,9 +3053,9 @@ static u8 InitFieldMoveMonSprite(u32 species, u32 otId, u32 personality)
  
  static void SpriteCB_FieldMoveMonSlideOnscreen(struct Sprite *sprite)
  {
@@ -3229,7 +3541,7 @@ index 1707cbd..bc25529 100644
          sprite->data[1] = 30;
          sprite->callback = SpriteCB_FieldMoveMonWaitAfterCry;
          if (sprite->data[6])
-@@ -3155,7 +3279,7 @@ static void SpriteCB_NPCFlyOut(struct Sprite *sprite)
+@@ -3155,7 +3280,7 @@ static void SpriteCB_NPCFlyOut(struct Sprite *sprite)
  {
      struct Sprite *npcSprite;
  
@@ -3238,7 +3550,7 @@ index 1707cbd..bc25529 100644
      sprite->y2 = Sin(sprite->data[2], 0x48);
      sprite->data[2] = (sprite->data[2] + 4) & 0xff;
      if (sprite->data[0])
-@@ -3362,7 +3486,11 @@ static void StartFlyBirdSwoopDown(u8 spriteId)
+@@ -3362,7 +3487,11 @@ static void StartFlyBirdSwoopDown(u8 spriteId)
      struct Sprite *sprite;
      sprite = &gSprites[spriteId];
      sprite->callback = SpriteCB_FlyBirdSwoopDown;
@@ -3251,7 +3563,7 @@ index 1707cbd..bc25529 100644
      sprite->y = 0;
      sprite->x2 = 0;
      sprite->y2 = 0;
-@@ -3431,7 +3559,7 @@ static void SpriteCB_FlyBirdLeaveBall(struct Sprite *sprite)
+@@ -3431,7 +3560,7 @@ static void SpriteCB_FlyBirdLeaveBall(struct Sprite *sprite)
  
  static void SpriteCB_FlyBirdSwoopDown(struct Sprite *sprite)
  {
@@ -3260,7 +3572,7 @@ index 1707cbd..bc25529 100644
      sprite->y2 = Sin(sprite->data[2], 72);
      sprite->data[2] = (sprite->data[2] + 4) & 0xFF;
      if (sprite->sPlayerSpriteId != MAX_SPRITES)
-@@ -4031,3 +4159,16 @@ void FldEff_PhotoFlash(void)
+@@ -4031,3 +4160,16 @@ void FldEff_PhotoFlash(void)
      BeginNormalPaletteFade(PALETTES_ALL, -1, 0x0F, 0x00, RGB_WHITE);
      CreateTask(Task_PhotoFlash, 90);
  }
@@ -4625,6 +4937,105 @@ index 2f52c5b..cd50f61 100644
  u16 GetGpuReg(u8 regOffset)
  {
  	if (regOffset == REG_OFFSET_DISPSTAT)
+diff --git a/src/help_message.c b/src/help_message.c
+index 7cd44db..b486dcc 100644
+--- a/src/help_message.c
++++ b/src/help_message.c
+@@ -2,6 +2,9 @@
+ #include "malloc.h"
+ #include "menu.h"
+ #include "malloc.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ static EWRAM_DATA u8 sHelpMessageWindowId = 0;
+ 
+@@ -58,6 +61,10 @@ void DrawHelpMessageWindowTilesById(u8 windowId)
+ 
+     width = (u8)GetWindowAttribute(windowId, WINDOW_WIDTH);
+     height = (u8)GetWindowAttribute(windowId, WINDOW_HEIGHT);
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: the tiles are read from the asset (15 tiles).
++    ptr = Port_ResolveAssetPointerSized(gHelpMessageWindow_Gfx, 15 * 32);
++#endif
+     
+     buffer = (u8 *)Alloc(32 * width * height);
+ 
+diff --git a/src/help_system_util.c b/src/help_system_util.c
+index d07881e..5c1aae9 100644
+--- a/src/help_system_util.c
++++ b/src/help_system_util.c
+@@ -7,6 +7,9 @@
+ #include "list_menu.h"
+ #include "strings.h"
+ #include "constants/songs.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define ZERO 0
+ 
+@@ -37,6 +40,18 @@ EWRAM_DATA struct ListMenuItem gHelpSystemListMenuItems[52] = {0};
+ static const u16 sTiles[] = INCBIN_U16("graphics/help_system/bg_tiles.4bpp");
+ static const u16 sPals[] = INCBIN_U16("graphics/help_system/bg_tiles.gbapal");
+ 
++#ifdef PORT_BRIDGE
++// The INCBINs are link-time stubs: sizeof() is the stub's, and the colors live
++// in the asset.
++#define HELP_PALS_SIZE   (Port_GetAssetSizeExact(sPals) ? Port_GetAssetSizeExact(sPals) : PLTT_SIZE_4BPP)
++#define HELP_TILES_SIZE  (Port_GetAssetSizeExact(sTiles) ? Port_GetAssetSizeExact(sTiles) : 9 * TILE_SIZE_4BPP)
++#define HELP_BG_COLOR    (((const u16 *)Port_ResolveAssetPointerSized(sPals, PLTT_SIZE_4BPP))[15])
++#else
++#define HELP_PALS_SIZE   sizeof(sPals)
++#define HELP_TILES_SIZE  sizeof(sTiles)
++#define HELP_BG_COLOR    sPals[15]
++#endif
++
+ u8 RunHelpSystemCallback(void)
+ {
+     s32 i;
+@@ -70,14 +85,14 @@ u8 RunHelpSystemCallback(void)
+         SaveMapTiles();
+         SaveMapGPURegs();
+         SaveMapTextColors();
+-        (*(vu16 *)PLTT) = sPals[15];
++        (*(vu16 *)PLTT) = HELP_BG_COLOR;
+         SetGpuReg(REG_OFFSET_DISPCNT, 0);
+         sVideoState.state = 2;
+         break;
+     case 2:
+         RequestDma3Fill(0, (void *)BG_CHAR_ADDR(3), BG_CHAR_SIZE, DMA3_16BIT);
+-        RequestDma3Copy(sPals, (void *)PLTT, sizeof(sPals), DMA3_16BIT);
+-        RequestDma3Copy(sTiles, gDecompressionBuffer + 0x3EE0, sizeof(sTiles), DMA3_16BIT);
++        RequestDma3Copy(sPals, (void *)PLTT, HELP_PALS_SIZE, DMA3_16BIT);
++        RequestDma3Copy(sTiles, gDecompressionBuffer + 0x3EE0, HELP_TILES_SIZE, DMA3_16BIT);
+         sVideoState.state = 3;
+         break;
+     case 3:
+@@ -115,8 +130,8 @@ u8 RunHelpSystemCallback(void)
+         RestoreMapTiles();
+         for (i = 0; i < 0x200; i += 2)
+         {
+-            *((vu16 *)(PLTT + 0x000 + i)) = sPals[15];
+-            *((vu16 *)(PLTT + 0x200 + i)) = sPals[15];
++            *((vu16 *)(PLTT + 0x000 + i)) = HELP_BG_COLOR;
++            *((vu16 *)(PLTT + 0x200 + i)) = HELP_BG_COLOR;
+         }
+         sVideoState.state = 7;
+         break;
+@@ -513,7 +528,11 @@ void HelpSystemRenderText(u8 fontId, u8 * dest, const u8 * src, u8 x, u8 y, u8 w
+         case CHAR_KEYPAD_ICON:
+             curChar = *src;
+             src++;
++            #ifdef PORT_BRIDGE
++            srcBlit.pixels = (u8 *)ResolveBitmapSource(gKeypadIconTiles, 0x20 * GetKeypadIconTileOffset(curChar));
++#else
+             srcBlit.pixels = (u8 *)&gKeypadIconTiles[0x20 * GetKeypadIconTileOffset(curChar)];
++#endif
+             srcBlit.width = 0x80;
+             srcBlit.height = 0x80;
+             destBlit.pixels = dest;
 diff --git a/src/intro.c b/src/intro.c
 index bec0f31..69ddf6e 100644
 --- a/src/intro.c
@@ -4787,6 +5198,35 @@ index 5890e76..83133b6 100644
      }
      else
      {
+diff --git a/src/item_menu.c b/src/item_menu.c
+index 8f52ead..2295c13 100644
+--- a/src/item_menu.c
++++ b/src/item_menu.c
+@@ -34,6 +34,9 @@
+ #include "constants/items.h"
+ #include "constants/songs.h"
+ #include "constants/quest_log.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define FREE_IF_SET(ptr) ({ if (ptr) Free(ptr); })
+ 
+@@ -1331,7 +1334,14 @@ static void UpdateQuantityToTossOrDeposit(s16 value, u8 ndigits)
+ // row of 0 is the bottom row in the list, up to LIST_TILES_HEIGHT at the top
+ static void DrawItemListRow(u8 row)
+ {
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: index into the resolved tilemap, not the stub.
++    const u16 *tilemap = Port_ResolveAssetPointerSized(sItemListTilemap, sizeof(sItemListTilemap));
++
++    CopyToBgTilemapBufferRect(1, &tilemap[(LIST_TILES_HEIGHT - row) * LIST_TILES_WIDTH], 11, 1 + LIST_TILES_HEIGHT - row, LIST_TILES_WIDTH, 1);
++#else
+     CopyToBgTilemapBufferRect(1, &sItemListTilemap[(LIST_TILES_HEIGHT - row) * LIST_TILES_WIDTH], 11, 1 + LIST_TILES_HEIGHT - row, LIST_TILES_WIDTH, 1);
++#endif
+     ScheduleBgCopyTilemapToVram(1);
+ }
+ 
 diff --git a/src/libgcnmultiboot.s b/src/libgcnmultiboot.s
 index e6e8c8d..a4a45cb 100644
 --- a/src/libgcnmultiboot.s
@@ -4950,11 +5390,26 @@ index 78087d7..8389acf 100644
  
  static void Task_ParentSearchForChildren(u8 taskId)
  {
+diff --git a/src/list_menu.c b/src/list_menu.c
+index 36b81fa..6e7a79e 100644
+--- a/src/list_menu.c
++++ b/src/list_menu.c
+@@ -754,5 +754,10 @@ void ListMenuLoadStdPalAt(u8 palOffset, u8 palId)
+ 
+ void BlitMenuInfoIcon(u8 windowId, u8 iconId, u16 x, u16 y)
+ {
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: index into the resolved asset, as Emerald 3DS's menu.c.
++    BlitBitmapRectToWindow(windowId, ResolveBitmapSource(gMenuInfoElements_Gfx, sMenuInfoIcons[iconId].offset * TILE_SIZE_4BPP), 0, 0, 128, 128, x, y, sMenuInfoIcons[iconId].width, sMenuInfoIcons[iconId].height);
++#else
+     BlitBitmapRectToWindow(windowId, &gMenuInfoElements_Gfx[sMenuInfoIcons[iconId].offset * TILE_SIZE_4BPP], 0, 0, 128, 128, x, y, sMenuInfoIcons[iconId].width, sMenuInfoIcons[iconId].height);
++#endif
+ }
 diff --git a/src/load_save.c b/src/load_save.c
-index 8b723dd..90b3ccc 100644
+index 8b723dd..8c87964 100644
 --- a/src/load_save.c
 +++ b/src/load_save.c
-@@ -11,6 +11,9 @@
+@@ -11,8 +11,13 @@
  #include "overworld.h"
  #include "quest_log.h"
  #include "sloopsvc.h"
@@ -4962,9 +5417,36 @@ index 8b723dd..90b3ccc 100644
 +#include "port_platform.h"
 +#endif
  
++#ifndef SAVEBLOCK_MOVE_RANGE
  #define SAVEBLOCK_MOVE_RANGE    128
++#endif
  
-@@ -47,7 +50,11 @@ void CheckForFlashMemory(void)
+ struct LoadedSaveData
+ {
+@@ -25,6 +30,14 @@ struct LoadedSaveData
+ };
+ 
+ // EWRAM DATA
++#ifdef PORTABLE
++EWRAM_DATA struct SaveBlock2Area gSaveBlock2Area = {0};
++EWRAM_DATA struct SaveBlock1Area gSaveBlock1Area = {0};
++EWRAM_DATA struct PokemonStorageArea gPokemonStorageArea = {0};
++#define gSaveBlock2_DMA (gSaveBlock2Area.moveRange)
++#define gSaveBlock1_DMA (gSaveBlock1Area.moveRange)
++#define gSaveBlock3_DMA (gPokemonStorageArea.moveRange)
++#else
+ EWRAM_DATA struct SaveBlock2 gSaveBlock2 = {0};
+ EWRAM_DATA u8 gSaveBlock2_DMA[SAVEBLOCK_MOVE_RANGE] = {0};
+ 
+@@ -33,6 +46,7 @@ EWRAM_DATA u8 gSaveBlock1_DMA[SAVEBLOCK_MOVE_RANGE] = {0};
+ 
+ EWRAM_DATA struct PokemonStorage gPokemonStorage = {0};
+ EWRAM_DATA u8 gSaveBlock3_DMA[SAVEBLOCK_MOVE_RANGE] = {0};
++#endif
+ 
+ EWRAM_DATA struct LoadedSaveData gLoadedSaveData = {0};
+ EWRAM_DATA u32 gLastEncryptionKey = 0;
+@@ -47,7 +61,11 @@ void CheckForFlashMemory(void)
  {
      if (!IdentifyFlash())
      {
@@ -4976,7 +5458,7 @@ index 8b723dd..90b3ccc 100644
          InitFlashTimer();
      }
      else
-@@ -102,18 +109,30 @@ void MoveSaveBlocks_ResetHeap(void)
+@@ -102,18 +120,30 @@ void MoveSaveBlocks_ResetHeap(void)
      pokemonStorageCopy = (struct PokemonStorage *)(gHeap + sizeof(struct SaveBlock2) + sizeof(struct SaveBlock1));
  
      // backup the saves.
@@ -5800,10 +6282,34 @@ index 584e94e..4b298ce 100644
      case 0:
          PlaySE(SE_SELECT);
 diff --git a/src/mon_markings.c b/src/mon_markings.c
-index 1500be9..1ea1940 100644
+index 1500be9..f95bb20 100644
 --- a/src/mon_markings.c
 +++ b/src/mon_markings.c
-@@ -378,10 +378,30 @@ void FreeMonMarkingsMenu(void)
+@@ -4,6 +4,9 @@
+ #include "mon_markings.h"
+ #include "graphics.h"
+ #include "constants/songs.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define ANIM_CURSOR (NUM_MON_MARKINGS * 2)
+ #define ANIM_TEXT   (ANIM_CURSOR + 1)
+@@ -291,7 +294,13 @@ void InitMonMarkingsMenu(struct MonMarkingsMenu *ptr)
+ static void BufferMenuWindowTiles(void)
+ {
+     const struct TextWindowGraphics *frame = GetUserWindowGraphics(gSaveBlock2Ptr->optionsWindowFrameType);
++#ifdef PORT_BRIDGE
++    // The frame's tiles are read a tile at a time below: from the loaded data,
++    // since an offset into an INCBIN stub lands on the next asset's stub.
++    sMenu->frameTiles = Port_ResolveAssetPointer(frame->tiles);
++#else
+     sMenu->frameTiles = frame->tiles;
++#endif
+     sMenu->framePalette = frame->palette;
+     sMenu->tileLoadState = 0;
+     CpuFill16(0, sMenu->windowSpriteTiles, sizeof(sMenu->windowSpriteTiles));
+@@ -378,10 +387,30 @@ void FreeMonMarkingsMenu(void)
          DestroySprite(sMenu->textSprite);
  }
  
@@ -5835,7 +6341,7 @@ index 1500be9..1ea1940 100644
      if (JOY_NEW(DPAD_UP))
      {
          PlaySE(SE_SELECT);
-@@ -399,23 +419,7 @@ bool8 HandleMonMarkingsMenuInput(void)
+@@ -399,23 +428,7 @@ bool8 HandleMonMarkingsMenuInput(void)
      }
  
      if (JOY_NEW(A_BUTTON))
@@ -5860,6 +6366,19 @@ index 1500be9..1ea1940 100644
  
      if (JOY_NEW(B_BUTTON))
      {
+@@ -600,6 +613,12 @@ static struct Sprite *CreateMarkingComboSprite(u16 tileTag, u16 paletteTag, cons
+ // Update what combination is shown, used for sprites created with CreateMonMarkingComboSprite
+ void UpdateMonMarkingTiles(u8 markings, void *dest)
+ {
++#ifdef PORT_BRIDGE
++    // Each combination is 0x80 bytes into the loaded data, not into the stub.
++    const u16 *gfx = Port_ResolveAssetPointer(sMonMarkings_Gfx);
++    RequestDma3Copy(&gfx[64 * markings], dest, 0x80, DMA3_32BIT);
++#else
+     RequestDma3Copy(&sMonMarkings_Gfx[64 * markings], dest, 0x80, DMA3_32BIT);
++#endif
+ }
+ 
 diff --git a/src/multiboot.c b/src/multiboot.c
 index b44c421..2cdf538 100644
 --- a/src/multiboot.c
@@ -5924,6 +6443,66 @@ index 3768b3c..0a8598d 100644
 +    u32 trainerId = (Random() << 0x10) | Random();
 +#endif
      SetTrainerId(trainerId, gSaveBlock2Ptr->playerTrainerId);
+ }
+ 
+diff --git a/src/new_menu_helpers.c b/src/new_menu_helpers.c
+index 08c0320..f697c8e 100644
+--- a/src/new_menu_helpers.c
++++ b/src/new_menu_helpers.c
+@@ -8,6 +8,9 @@
+ #include "field_specials.h"
+ #include "text_window.h"
+ #include "script.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define DLG_WINDOW_PALETTE_NUM 15
+ #define DLG_WINDOW_BASE_TILE_NUM 0x200
+@@ -307,7 +310,34 @@ void *MallocAndDecompress(const void *src, u32 *size)
+ {
+     void *ptr;
+     u8 *sizeAsBytes = (u8 *)size;
+-    const u8 *srcAsBytes = src;
++    const u8 *srcAsBytes;
++#ifdef PORT_BRIDGE
++    // An INCBIN is a link-time stub: its LZ77 header (the size) is read from
++    // the asset, held in the game heap for the decompression, as Emerald 3DS's
++    // malloc_and_decompress does.
++    void *compressed = NULL;
++    u32 compressedSize = Port_GetAssetSize(src);
++
++    *size = 0;
++    if (Port_IsAssetStub(src))
++    {
++        if (compressedSize < 4)
++            return NULL;
++        compressed = Alloc(compressedSize);
++        if (compressed == NULL || !Port_LoadAssetPointerToBufferSized(src, compressed, compressedSize))
++        {
++            Free(compressed);
++            return NULL;
++        }
++        src = compressed;
++    }
++    if (src == NULL || ((const u8 *)src)[0] != 0x10)
++    {
++        Free(compressed);
++        return NULL;
++    }
++#endif
++    srcAsBytes = src;
+ 
+     sizeAsBytes[0] = srcAsBytes[1];
+     sizeAsBytes[1] = srcAsBytes[2];
+@@ -317,6 +347,9 @@ void *MallocAndDecompress(const void *src, u32 *size)
+     ptr = Alloc(*size);
+     if (ptr)
+         LZ77UnCompWram(src, ptr);
++#ifdef PORT_BRIDGE
++    Free(compressed);
++#endif
+     return ptr;
  }
  
 diff --git a/src/overworld.c b/src/overworld.c
@@ -6822,6 +7401,56 @@ index 84f2342..9c05a2c 100644
      gTasks[taskId].tCoeff = coeff;
      gTasks[taskId].tCoeffTarget = coeffTarget;
      if (delay >= 0)
+diff --git a/src/party_menu.c b/src/party_menu.c
+index 7f3a881..e8aadf4 100644
+--- a/src/party_menu.c
++++ b/src/party_menu.c
+@@ -68,6 +68,9 @@
+ #include "constants/quest_log.h"
+ #include "constants/songs.h"
+ #include "constants/sound.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define PARTY_PAL_SELECTED     (1 << 0)
+ #define PARTY_PAL_FAINTED      (1 << 1)
+@@ -1062,8 +1065,19 @@ static u8 GetPartyBoxPaletteFlags(u8 slot, u8 animNum)
+ 
+ static void DrawCancelConfirmButtons(void)
+ {
++#ifdef PORT_BRIDGE
++    // Read from the loaded tilemaps, not from the INCBINs' stubs.
++    const void *confirm = Port_ResolveAssetPointerSized(sConfirmButton_Tilemap, 7 * 2 * sizeof(u16));
++    const void *cancel = Port_ResolveAssetPointerSized(sCancelButton_Tilemap, 7 * 2 * sizeof(u16));
++
++    if (confirm == NULL || cancel == NULL)
++        return;
++    CopyToBgTilemapBufferRect_ChangePalette(1, confirm, 23, 16, 7, 2, 17);
++    CopyToBgTilemapBufferRect_ChangePalette(1, cancel, 23, 18, 7, 2, 17);
++#else
+     CopyToBgTilemapBufferRect_ChangePalette(1, sConfirmButton_Tilemap, 23, 16, 7, 2, 17);
+     CopyToBgTilemapBufferRect_ChangePalette(1, sCancelButton_Tilemap, 23, 18, 7, 2, 17);
++#endif
+     ScheduleBgCopyTilemapToVram(1);
+ }
+ 
+@@ -2174,6 +2188,15 @@ static void BlitBitmapToPartyWindow(u8 windowId, const u8 *tileNums, u8 menuBoxW
+     u8 *pixels = AllocZeroed(height * width * 32);
+     u8 i, j;
+ 
++#ifdef PORT_BRIDGE
++    // Read from the loaded tilemap, not from the INCBIN's stub.
++    tileNums = Port_ResolveAssetPointerSized(tileNums, (y + height) * menuBoxWidth);
++    if (tileNums == NULL)
++    {
++        Free(pixels);
++        return;
++    }
++#endif
+     if (pixels != NULL)
+     {
+         for (i = 0; i < height; ++i)
 diff --git a/src/platform/bios.c b/src/platform/bios.c
 index cab352c..eadfe8c 100644
 --- a/src/platform/bios.c
@@ -6928,8 +7557,54 @@ index a77401d..39faf20 100644
      gSprites[spriteId].sDelay = delay;
      gSprites[spriteId].sMonPalNum = monPalNum;
      gSprites[spriteId].sFadePalsLo = fadePalettes;
+diff --git a/src/pokedex_screen.c b/src/pokedex_screen.c
+index 01960d2..aeb4d3e 100644
+--- a/src/pokedex_screen.c
++++ b/src/pokedex_screen.c
+@@ -20,6 +20,9 @@
+ #include "constants/sound.h"
+ #include "pokedex_area_markers.h"
+ #include "field_specials.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define TAG_AREA_MARKERS 2001
+ 
+@@ -2504,10 +2507,18 @@ bool8 DexScreen_TurnCategoryPage_BgEffect(u8 page)
+ static bool8 DexScreen_FlipCategoryPageInDirection(u8 direction)
+ {
+     u16 color;
++#ifdef PORT_BRIDGE
++    // The INCBINs are stubs: the color is read from the asset.
++    if (IsNationalPokedexEnabled())
++        color = ((const u16 *)Port_ResolveAssetPointerSized(sNationalDexPalette, PLTT_SIZEOF(8)))[7];
++    else
++        color = ((const u16 *)Port_ResolveAssetPointerSized(sKantoDexPalette, PLTT_SIZEOF(8)))[7];
++#else
+     if (IsNationalPokedexEnabled())
+         color = sNationalDexPalette[7];
+     else
+         color = sKantoDexPalette[7];
++#endif
+     switch (sPokedexScreenData->data[0])
+     {
+     case 0:
+@@ -2898,7 +2909,12 @@ void DexScreen_DrawMonFootprint(u8 windowId, u16 species, u8 x, u8 y)
+ 
+     if (!(DexScreen_GetSetPokedexFlag(species, FLAG_GET_CAUGHT, TRUE)))
+         return;
++#ifdef PORT_BRIDGE
++    // The footprints are INCBIN stubs here; read directly they came out blank.
++    footprint = (u8 *)Port_ResolveAssetPointerSized(gMonFootprintTable[species], 32);
++#else
+     footprint = (u8 *)(gMonFootprintTable[species]);
++#endif
+     buffer = gDecompressionBuffer;
+     unused = 0;
+     tileIdx = 0;
 diff --git a/src/pokemon.c b/src/pokemon.c
-index 66a5c3d..723db0d 100644
+index 66a5c3d..a79e6e8 100644
 --- a/src/pokemon.c
 +++ b/src/pokemon.c
 @@ -36,6 +36,9 @@
@@ -6942,6 +7617,31 @@ index 66a5c3d..723db0d 100644
  
  #define SPECIES_TO_HOENN(name)      [SPECIES_##name - 1] = HOENN_DEX_##name
  #define SPECIES_TO_NATIONAL(name)   [SPECIES_##name - 1] = NATIONAL_DEX_##name
+@@ -5273,6 +5276,15 @@ u16 SpeciesToCryId(u16 species)
+     (destPixels) is an 8 bit pointer, so it addresses two pixels. Shifting by 4 accesses the 2nd
+     of these pixels, so this is done every other time.
+ */
++#ifdef PORT_BRIDGE
++// The spot images are INCBINs inside the structs, zero-filled here; the asset
++// table holds the four images back to back at the table's address.
++#define SPINDA_SPOT_IMAGE(i) ((const u16 *)Port_ResolveAssetPointerSized(sSpindaSpotGraphics, \
++    ARRAY_COUNT(sSpindaSpotGraphics) * SPINDA_SPOT_HEIGHT * sizeof(u16)) + (i) * SPINDA_SPOT_HEIGHT)
++#else
++#define SPINDA_SPOT_IMAGE(i) (sSpindaSpotGraphics[(i)].image)
++#endif
++
+ #define DRAW_SPINDA_SPOTS(personality, dest)                                    \
+ {                                                                               \
+     s32 i;                                                                      \
+@@ -5285,7 +5297,7 @@ u16 SpeciesToCryId(u16 species)
+         for (row = 0; row < SPINDA_SPOT_HEIGHT; row++)                          \
+         {                                                                       \
+             s32 column;                                                         \
+-            s32 spotPixelRow = sSpindaSpotGraphics[i].image[row];               \
++            s32 spotPixelRow = SPINDA_SPOT_IMAGE(i)[row];                       \
+                                                                                 \
+             for (column = x; column < x + SPINDA_SPOT_WIDTH; column++)          \
+             {                                                                   \
 diff --git a/src/pokemon_icon.c b/src/pokemon_icon.c
 index 037b1bf..a4cc8dd 100644
 --- a/src/pokemon_icon.c
@@ -7002,10 +7702,70 @@ index e41c296..93b7f15 100644
      u32 height;
      u32 var;
  
+diff --git a/src/pokemon_special_anim_scene.c b/src/pokemon_special_anim_scene.c
+index bdb070c..63407ac 100644
+--- a/src/pokemon_special_anim_scene.c
++++ b/src/pokemon_special_anim_scene.c
+@@ -1385,7 +1385,12 @@ void CreateLevelUpVerticalSpritesTask(u16 x, u16 y, u16 tileTag, u16 paletteTag,
+     u8 taskId;
+     spriteSheet.tag = tileTag;
+     spriteSheet.data = sLevelUp_Gfx;
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: the LZ77 header lives in the asset.
++    spriteSheet.size = GetDecompressedDataSize((const u8 *)sLevelUp_Gfx);
++#else
+     spriteSheet.size = sLevelUp_Gfx[0] >> 8;
++#endif
+     spritePalette.data = sLevelUp_Pal;
+     spritePalette.tag = paletteTag;
+     LoadCompressedSpriteSheet(&spriteSheet);
+diff --git a/src/pokemon_storage_system_tasks.c b/src/pokemon_storage_system_tasks.c
+index fdc5250..9af77b3 100644
+--- a/src/pokemon_storage_system_tasks.c
++++ b/src/pokemon_storage_system_tasks.c
+@@ -25,6 +25,9 @@
+ #include "constants/items.h"
+ #include "constants/help_system.h"
+ #include "constants/songs.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ EWRAM_DATA struct PokemonStorageSystemData *gStorage = NULL;
+ static EWRAM_DATA bool8 sInPartyMenu = 0;
+@@ -2488,6 +2491,10 @@ static void SetPartySlotTilemap(u8 pos, bool8 isFilled)
+         tilemap = sPartySlotFilled_Tilemap;
+     else
+         tilemap = sPartySlotEmpty_Tilemap;
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: its 3x4 entries are read from the asset.
++    tilemap = Port_ResolveAssetPointerSized(tilemap, 3 * 4 * sizeof(*tilemap));
++#endif
+ 
+     index = 3 * (3 * (pos - 1) + 1);
+     index *= 4;
 diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
-index b3e3c77..722d44a 100644
+index b3e3c77..a05be93 100644
 --- a/src/pokemon_summary_screen.c
 +++ b/src/pokemon_summary_screen.c
+@@ -2009,13 +2009,13 @@ static u8 PokeSum_HandleLoadBgGfx(void)
+         LoadPalette(gSummaryScreen_Bg_Pal, BG_PLTT_ID(0), 5 * PLTT_SIZE_4BPP);
+         if (IsMonShiny(&sMonSummaryScreen->currentMon) == TRUE && !sMonSummaryScreen->isEgg)
+         {
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 6], BG_PLTT_ID(0), PLTT_SIZE_4BPP);
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 5], BG_PLTT_ID(1), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 6) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(0), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 5) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(1), PLTT_SIZE_4BPP);
+         }
+         else
+         {
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 0], BG_PLTT_ID(0), PLTT_SIZE_4BPP);
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 1], BG_PLTT_ID(1), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 0) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(0), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 1) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(1), PLTT_SIZE_4BPP);
+         }
+ 
+         break;
 @@ -2676,6 +2676,8 @@ static void PokeSum_PrintTrainerMemo_Mon_HeldByOT(void)
              else
                  DynamicPlaceholderTextUtil_ExpandPlaceholders(natureMetOrHatchedAtLevelStr, gText_PokeSum_Met);
@@ -7024,6 +7784,116 @@ index b3e3c77..722d44a 100644
      }
  
      AddTextPrinterParameterized4(sMonSummaryScreen->windowIds[POKESUM_WIN_TRAINER_MEMO], FONT_NORMAL, 0, 3, 0, 0, sLevelNickTextColors[0], TEXT_SKIP_DRAW, natureMetOrHatchedAtLevelStr);
+@@ -5078,13 +5082,13 @@ static void Task_PokeSum_SwitchDisplayedPokemon(u8 taskId)
+ 
+         if (IsMonShiny(&sMonSummaryScreen->currentMon) == TRUE && !sMonSummaryScreen->isEgg)
+         {
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 6], BG_PLTT_ID(0), PLTT_SIZE_4BPP);
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 5], BG_PLTT_ID(1), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 6) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(0), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 5) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(1), PLTT_SIZE_4BPP);
+         }
+         else
+         {
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 0], BG_PLTT_ID(0), PLTT_SIZE_4BPP);
+-            LoadPalette(&gSummaryScreen_Bg_Pal[16 * 1], BG_PLTT_ID(1), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 0) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(0), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(gSummaryScreen_Bg_Pal, (16 * 1) * sizeof(gSummaryScreen_Bg_Pal[0]), BG_PLTT_ID(1), PLTT_SIZE_4BPP);
+         }
+ 
+         sMonSummaryScreen->switchMonTaskState++;
+diff --git a/src/quest_log.c b/src/quest_log.c
+index 0a2f76f..251497b 100644
+--- a/src/quest_log.c
++++ b/src/quest_log.c
+@@ -29,6 +29,9 @@
+ #include "constants/quest_log.h"
+ #include "constants/field_weather.h"
+ #include "constants/event_object_movement.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ enum {
+     WIN_TOP_BAR,      // Contains the "Previously on..." text
+@@ -1046,6 +1049,11 @@ static void CopyDescriptionWindowTiles(u8 windowId)
+     u16 *buffer = Alloc(DESC_WIN_SIZE);
+     u8 i, j, y;
+ 
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: its three tiles are read from the asset.
++    src = Port_ResolveAssetPointerSized(sDescriptionWindow_Gfx, 3 * TILE_SIZE_4BPP);
++#endif
++
+     if (buffer)
+     {
+         for (i = 0; i < DESC_WIN_HEIGHT; i++)
+diff --git a/src/region_map.c b/src/region_map.c
+index d65f99f..fb39cc0 100644
+--- a/src/region_map.c
++++ b/src/region_map.c
+@@ -16,6 +16,9 @@
+ #include "constants/region_map_sections.h"
+ #include "constants/heal_locations.h"
+ #include "constants/maps.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define MAP_WIDTH 22
+ #define MAP_HEIGHT 15
+@@ -959,10 +962,16 @@ static void RegionMap_DarkenPalette(u16 *pal, u16 size, u16 tint)
+ static void TintMapEdgesPalette(void)
+ {
+     u16 mapEdgesPal[16];
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: copy the colors out of the asset.
++    if (!Port_LoadAssetRangeToBuffer(sRegionMap_Pal, PLTT_SIZEOF(0x20), mapEdgesPal, sizeof(mapEdgesPal)))
++        CpuFill16(0, mapEdgesPal, sizeof(mapEdgesPal));
++#else
+     CpuCopy16(&sRegionMap_Pal[0x20], mapEdgesPal, sizeof(mapEdgesPal));
++#endif
+     RegionMap_DarkenPalette(mapEdgesPal, NELEMS(mapEdgesPal), 95);
+     LoadPalette(mapEdgesPal, BG_PLTT_ID(2), sizeof(mapEdgesPal));
+-    LoadPalette(&sRegionMap_Pal[0x2F], BG_PLTT_ID(2) + 15, PLTT_SIZEOF(1));
++    LoadPaletteWithOffset(sRegionMap_Pal, (0x2F) * sizeof(sRegionMap_Pal[0]), BG_PLTT_ID(2) + 15, PLTT_SIZEOF(1));
+ }
+ 
+ static void InitRegionMap(u8 type)
+@@ -1112,11 +1121,11 @@ static bool8 LoadRegionMapGfx(void)
+         TintMapEdgesPalette();
+         if (sRegionMap->type != REGIONMAP_TYPE_NORMAL)
+         {
+-            LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(0), sizeof(sTopBar_Pal[15]));
+-            LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(1), sizeof(sTopBar_Pal[15]));
+-            LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(2), sizeof(sTopBar_Pal[15]));
+-            LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(3), sizeof(sTopBar_Pal[15]));
+-            LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(4), sizeof(sTopBar_Pal[15]));
++            LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(0), sizeof(sTopBar_Pal[15]));
++            LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(1), sizeof(sTopBar_Pal[15]));
++            LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(2), sizeof(sTopBar_Pal[15]));
++            LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(3), sizeof(sTopBar_Pal[15]));
++            LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(4), sizeof(sTopBar_Pal[15]));
+         }
+         break;
+     case 2:
+@@ -2416,11 +2425,11 @@ static void Task_MapOpenAnim(u8 taskId)
+         sMapOpenCloseAnim->openState++;
+         break;
+     case 10:
+-        LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(0), sizeof(sTopBar_Pal[15]));
+-        LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(1), sizeof(sTopBar_Pal[15]));
+-        LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(2), sizeof(sTopBar_Pal[15]));
+-        LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(3), sizeof(sTopBar_Pal[15]));
+-        LoadPalette(&sTopBar_Pal[15], BG_PLTT_ID(4), sizeof(sTopBar_Pal[15]));
++        LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(0), sizeof(sTopBar_Pal[15]));
++        LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(1), sizeof(sTopBar_Pal[15]));
++        LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(2), sizeof(sTopBar_Pal[15]));
++        LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(3), sizeof(sTopBar_Pal[15]));
++        LoadPaletteWithOffset(sTopBar_Pal, (15) * sizeof(sTopBar_Pal[0]), BG_PLTT_ID(4), sizeof(sTopBar_Pal[15]));
+         sMapOpenCloseAnim->openState++;
+         break;
+     case 11:
 diff --git a/src/save.c b/src/save.c
 index 36b960f..c067276 100644
 --- a/src/save.c
@@ -7457,6 +8327,146 @@ index e4c7fc7..475e6f7 100644
      else
      {
          if (!ObjectEventSetHeldMovement(&gObjectEvents[objEventId], nextMoveActionId))
+diff --git a/src/seagallop.c b/src/seagallop.c
+index 8d00ead..ca14dbf 100644
+--- a/src/seagallop.c
++++ b/src/seagallop.c
+@@ -12,6 +12,9 @@
+ #include "constants/songs.h"
+ #include "constants/maps.h"
+ #include "constants/seagallop.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define TILESTAG_FERRY 3000
+ #define TILESTAG_WAKE  4000
+@@ -202,7 +205,12 @@ static void CB2_SetUpSeagallopScene(void)
+         gMain.state++;
+         break;
+     case 3:
++#ifdef PORT_BRIDGE
++        // The INCBIN is a stub: sizeof() is the stub's.
++        LoadBgTiles(3, sWaterTiles, Port_GetAssetSizeExact(sWaterTiles), 0);
++#else
+         LoadBgTiles(3, sWaterTiles, sizeof(sWaterTiles), 0);
++#endif
+         if (GetDirectionOfTravel() == DIRN_EASTBOUND)
+             CopyToBgTilemapBufferRect(3, sWaterTilemap_EB, 0, 0, 32, 32);
+         else
+diff --git a/src/shop.c b/src/shop.c
+index 3d6b1cd..4d7aa20 100644
+--- a/src/shop.c
++++ b/src/shop.c
+@@ -29,6 +29,9 @@
+ #include "constants/items.h"
+ #include "constants/game_stat.h"
+ #include "constants/field_weather.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define tItemCount data[1]
+ #define tItemId data[5]
+@@ -726,8 +729,18 @@ static void BuyMenuDrawMapBg(void)
+     const struct MapLayout *mapLayout;
+     u16 metatile;
+     u8 metatileLayerType;
++    const u16 *primaryMetatiles, *secondaryMetatiles;
+ 
+     mapLayout = gMapHeader.mapLayout;
++#ifdef PORT_BRIDGE
++    // The tilesets' metatile tables are INCBIN stubs here (field_camera.c does
++    // the same); read through the stubs, the map behind the menu stayed black.
++    primaryMetatiles = Port_ResolveAssetPointer(mapLayout->primaryTileset->metatiles);
++    secondaryMetatiles = Port_ResolveAssetPointer(mapLayout->secondaryTileset->metatiles);
++#else
++    primaryMetatiles = mapLayout->primaryTileset->metatiles;
++    secondaryMetatiles = mapLayout->secondaryTileset->metatiles;
++#endif
+     GetXYCoordsOneStepInFrontOfPlayer(&x, &y);
+     x -= 2;
+     y -= 3;
+@@ -740,9 +753,9 @@ static void BuyMenuDrawMapBg(void)
+             metatileLayerType = MapGridGetMetatileLayerTypeAt(x + i, y + j);
+ 
+             if (metatile < NUM_METATILES_IN_PRIMARY)
+-                BuyMenuDrawMapMetatile(i, j, mapLayout->primaryTileset->metatiles + metatile * NUM_TILES_PER_METATILE, metatileLayerType);
++                BuyMenuDrawMapMetatile(i, j, primaryMetatiles + metatile * NUM_TILES_PER_METATILE, metatileLayerType);
+             else
+-                BuyMenuDrawMapMetatile(i, j, mapLayout->secondaryTileset->metatiles + ((metatile - NUM_METATILES_IN_PRIMARY) * NUM_TILES_PER_METATILE), metatileLayerType);
++                BuyMenuDrawMapMetatile(i, j, secondaryMetatiles + ((metatile - NUM_METATILES_IN_PRIMARY) * NUM_TILES_PER_METATILE), metatileLayerType);
+         }
+     }
+ }
+diff --git a/src/slot_machine.c b/src/slot_machine.c
+index aa5d4c6..9880bef 100644
+--- a/src/slot_machine.c
++++ b/src/slot_machine.c
+@@ -12,6 +12,9 @@
+ #include "trig.h"
+ #include "strings.h"
+ #include "constants/songs.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define NUM_REELS 3
+ #define REEL_LENGTH 21 // Total number of icons per reel
+@@ -1784,7 +1787,21 @@ static bool32 LoadSpriteGraphicsAndAllocateManager(void)
+ 
+     for (i = 0; i < ARRAY_COUNT(sSpriteSheets); i++)
+         LoadCompressedSpriteSheet(&sSpriteSheets[i]);
++#ifdef PORT_BRIDGE
++    // sReelIcons_Pal[i] points past the INCBIN's stub: each row is taken from
++    // the loaded asset instead (palettes are copied at once).
++    for (i = 0; sSpritePalettes[i].data != NULL; i++)
++    {
++        struct SpritePalette palette = sSpritePalettes[i];
++
++        if (i < 5) // PALTAG_REEL_ICONS_0..4: sReelIcons_Pal[0..4]
++            palette.data = (const u16 *)Port_ResolveAssetPointerSized(sReelIcons_Pal, 5 * PLTT_SIZE_4BPP) + 16 * i;
++        if (LoadSpritePalette(&palette) == 0xFF)
++            break;
++    }
++#else
+     LoadSpritePalettes(sSpritePalettes);
++#endif
+     sSlotMachineGfxManager = Alloc(sizeof(*sSlotMachineGfxManager));
+     if (sSlotMachineGfxManager == NULL)
+         return FALSE;
+@@ -2039,7 +2056,13 @@ static bool8 SlotsTask_GraphicsInit(u8 * state, struct SlotMachineSetupTaskData
+         SetBgTilemapBuffer(2, ptr->bg2TilemapBuffer);
+         CopyToBgTilemapBuffer(2, sBg_Tilemap, 0, 0x00);
+         CopyBgTilemapBufferToVram(2);
++#ifdef PORT_BRIDGE
++        // sizeof() is one row of the INCBIN stub: load the whole asset (the
++        // copy stops at its end).
++        LoadPaletteWithOffset(sBg_Pal, 0, BG_PLTT_ID(0), 5 * PLTT_SIZE_4BPP);
++#else
+         LoadPalette(sBg_Pal, BG_PLTT_ID(0), sizeof(sBg_Pal));
++#endif
+         LoadPalette(sBgPal_MatchLines, BG_PLTT_ID(PALSLOT_LINE_BET), sizeof(sBgPal_MatchLines));
+         LoadPalette(sCombosWindow_Pal, BG_PLTT_ID(7), sizeof(sCombosWindow_Pal));
+         SetBackdropColor(RGB(30, 30, 31), pal);
+@@ -2399,7 +2422,7 @@ static void Task_FlashWinningLine(u8 taskId)
+         if (data[1] == 0)
+         {
+             u16 y = gSineTable[data[2]] >> 7;
+-            LoadPalette(&sBgPal_PayoutLight[y], BG_PLTT_ID(1), sizeof(sBgPal_PayoutLight[0]));
++            LoadPaletteWithOffset(sBgPal_PayoutLight, (y) * sizeof(sBgPal_PayoutLight[0]), BG_PLTT_ID(1), sizeof(sBgPal_PayoutLight[0]));
+             data[2] += 32;
+             data[2] &= 0x7F;
+             data[1] = 8;
+@@ -2438,7 +2461,7 @@ static void Task_FlashWinningLine(u8 taskId)
+         }
+         
+         // Restore payout lights to normal color
+-        LoadPalette(&sBg_Pal[1], BG_PLTT_ID(1), sizeof(sBg_Pal[1]));
++        LoadPaletteWithOffset(sBg_Pal, (1) * sizeof(sBg_Pal[0]), BG_PLTT_ID(1), sizeof(sBg_Pal[1]));
+ 
+         CopyBgTilemapBufferToVram(2);
+         data[0]++;
 diff --git a/src/sound.c b/src/sound.c
 index 9060aa5..23a569f 100644
 --- a/src/sound.c
@@ -8254,7 +9264,7 @@ index 01503dc..dad41d2 100644
      else
          return 0;
 diff --git a/src/text.c b/src/text.c
-index f3eef07..14d1b17 100644
+index f3eef07..8db63f6 100644
 --- a/src/text.c
 +++ b/src/text.c
 @@ -5,6 +5,9 @@
@@ -8278,7 +9288,7 @@ index f3eef07..14d1b17 100644
  
  COMMON_DATA TextFlags gTextFlags = {0};
  
-@@ -97,8 +104,27 @@ struct
+@@ -97,8 +104,32 @@ struct
  
  const u8 gKeypadIconTiles[] = INCBIN_U8("graphics/fonts/keypad_icons.4bpp");
  
@@ -8303,56 +9313,81 @@ index f3eef07..14d1b17 100644
 +#define FONT_EXPORT static
 +#endif
 +
++#ifdef PORT_BRIDGE
++// Named as exported, for the asset index (gen_asset_table.py reads names off the source).
++const u16 gFontSmallLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_small.hwlatfont");
++#else
 +FONT_EXPORT const u16 sFontSmallLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_small.hwlatfont");
++#endif
 +FONT_EXPORT const u8 sFontSmallLatinGlyphWidths[] = 
  {
       5,  5,  5,  5,  5,  5,  5,  5,  5,  4,  5,  4,  4,  5, 
       5,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,  5,
-@@ -140,8 +166,8 @@ static const u8 sFontSmallLatinGlyphWidths[] =
+@@ -140,8 +171,13 @@ static const u8 sFontSmallLatinGlyphWidths[] =
  };
  static const u16 sFontSmallJapaneseGlyphs[] = INCBIN_U16("graphics/fonts/japanese_small.fwjpnfont");
  
 -static const u16 sFontNormalCopy1LatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_normal.fwlatfont");
 -static const u8 sFontNormalCopy1LatinGlyphWidths[] =
++#ifdef PORT_BRIDGE
++// Named as exported, for the asset index (gen_asset_table.py reads names off the source).
++const u16 gFontNormalCopy1LatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_normal.fwlatfont");
++#else
 +FONT_EXPORT const u16 sFontNormalCopy1LatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_normal.fwlatfont");
++#endif
 +FONT_EXPORT const u8 sFontNormalCopy1LatinGlyphWidths[] =
  {
       6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
       6,  6,  8,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
-@@ -183,8 +209,8 @@ static const u8 sFontNormalCopy1LatinGlyphWidths[] =
+@@ -183,8 +219,13 @@ static const u8 sFontNormalCopy1LatinGlyphWidths[] =
  };
  static const u16 sFontTallJapaneseGlyphs[] = INCBIN_U16("graphics/fonts/japanese_tall.fwjpnfont");
  
 -static const u16 sFontNormalLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_normal.fwlatfont");
 -static const u8 sFontNormalLatinGlyphWidths[] =
++#ifdef PORT_BRIDGE
++// Named as exported, for the asset index (gen_asset_table.py reads names off the source).
++const u16 gFontNormalLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_normal.fwlatfont");
++#else
 +FONT_EXPORT const u16 sFontNormalLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_normal.fwlatfont");
++#endif
 +FONT_EXPORT const u8 sFontNormalLatinGlyphWidths[] =
  {
       6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
       6,  6,  8,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
-@@ -249,8 +275,8 @@ static const u8 sFontNormalJapaneseGlyphWidths[] =
+@@ -249,8 +290,13 @@ static const u8 sFontNormalJapaneseGlyphWidths[] =
      10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,  0
  };
  
 -static const u16 sFontMaleLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_male.fwlatfont");
 -static const u8 sFontMaleLatinGlyphWidths[] =
++#ifdef PORT_BRIDGE
++// Named as exported, for the asset index (gen_asset_table.py reads names off the source).
++const u16 gFontMaleLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_male.fwlatfont");
++#else
 +FONT_EXPORT const u16 sFontMaleLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_male.fwlatfont");
++#endif
 +FONT_EXPORT const u8 sFontMaleLatinGlyphWidths[] =
  {
       6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
       6,  6,  8,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
-@@ -315,8 +341,8 @@ static const u8 sFontMaleJapaneseGlyphWidths[] =
+@@ -315,8 +361,13 @@ static const u8 sFontMaleJapaneseGlyphWidths[] =
      10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,  0
  };
  
 -static const u16 sFontFemaleLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_female.fwlatfont");
 -static const u8 sFontFemaleLatinGlyphWidths[] =
++#ifdef PORT_BRIDGE
++// Named as exported, for the asset index (gen_asset_table.py reads names off the source).
++const u16 gFontFemaleLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_female.fwlatfont");
++#else
 +FONT_EXPORT const u16 sFontFemaleLatinGlyphs[] = INCBIN_U16("graphics/fonts/latin_female.fwlatfont");
++#endif
 +FONT_EXPORT const u8 sFontFemaleLatinGlyphWidths[] =
  {
       6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
       6,  6,  8,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,  6,
-@@ -383,6 +409,23 @@ static const u8 sFontFemaleJapaneseGlyphWidths[] =
+@@ -383,6 +434,23 @@ static const u8 sFontFemaleJapaneseGlyphWidths[] =
  
  static const u16 sFontBoldJapaneseGlyphs[] = INCBIN_U16("graphics/fonts/japanese_bold.fwjpnfont");
  
@@ -8376,7 +9411,20 @@ index f3eef07..14d1b17 100644
  u16 FontFunc_Small(struct TextPrinter *textPrinter)
  {
      struct TextPrinterSubStruct *subStruct = &textPrinter->subUnion.sub;
-@@ -547,6 +590,20 @@ bool8 TextPrinterWaitAutoMode(struct TextPrinter *textPrinter)
+@@ -496,7 +564,12 @@ void TextPrinterDrawDownArrow(struct TextPrinter *textPrinter)
+                     arrowTiles = sDownArrowTiles;
+                     break;
+                 case 1:
++#ifdef PORT_BRIDGE
++                    // The INCBIN is a stub: offset into the resolved tiles.
++                    arrowTiles = ResolveBitmapSource(sDownArrowTiles, DARK_DOWN_ARROW_OFFSET);
++#else
+                     arrowTiles = &sDownArrowTiles[DARK_DOWN_ARROW_OFFSET];
++#endif
+                     break;
+             }
+ 
+@@ -547,6 +620,20 @@ bool8 TextPrinterWaitAutoMode(struct TextPrinter *textPrinter)
      }
  }
  
@@ -8397,7 +9445,7 @@ index f3eef07..14d1b17 100644
  bool16 TextPrinterWaitWithDownArrow(struct TextPrinter *textPrinter)
  {
      bool8 result = FALSE;
-@@ -557,7 +614,10 @@ bool16 TextPrinterWaitWithDownArrow(struct TextPrinter *textPrinter)
+@@ -557,7 +644,10 @@ bool16 TextPrinterWaitWithDownArrow(struct TextPrinter *textPrinter)
      else
      {
          TextPrinterDrawDownArrow(textPrinter);
@@ -8409,7 +9457,7 @@ index f3eef07..14d1b17 100644
          {
              result = TRUE;
              PlaySE(SE_SELECT);
-@@ -575,7 +635,10 @@ bool16 TextPrinterWait(struct TextPrinter *textPrinter)
+@@ -575,7 +665,10 @@ bool16 TextPrinterWait(struct TextPrinter *textPrinter)
      }
      else
      {
@@ -8421,7 +9469,20 @@ index f3eef07..14d1b17 100644
          {
              result = TRUE;
              PlaySE(SE_SELECT);
-@@ -636,14 +699,17 @@ u16 RenderText(struct TextPrinter *textPrinter)
+@@ -604,7 +697,12 @@ void DrawDownArrow(u8 windowId, u16 x, u16 y, u8 bgColor, bool8 drawArrow, u8 *c
+                     arrowTiles = sDownArrowTiles;
+                     break;
+                 case 1:
++#ifdef PORT_BRIDGE
++                    // The INCBIN is a stub: offset into the resolved tiles.
++                    arrowTiles = ResolveBitmapSource(sDownArrowTiles, DARK_DOWN_ARROW_OFFSET);
++#else
+                     arrowTiles = &sDownArrowTiles[DARK_DOWN_ARROW_OFFSET];
++#endif
+                     break;
+             }
+ 
+@@ -636,14 +734,17 @@ u16 RenderText(struct TextPrinter *textPrinter)
      switch (textPrinter->state)
      {
      case RENDER_STATE_HANDLE_CHAR:
@@ -8441,7 +9502,7 @@ index f3eef07..14d1b17 100644
                  subStruct->hasPrintBeenSpedUp = TRUE;
                  textPrinter->delayCounter = 0;
              }
-@@ -931,7 +997,11 @@ static s32 GetStringWidthFixedWidthFont(const u8 *str, u8 fontId, u8 letterSpaci
+@@ -931,7 +1032,11 @@ static s32 GetStringWidthFixedWidthFont(const u8 *str, u8 fontId, u8 letterSpaci
  
      width = 0;
      line = 0;
@@ -8453,7 +9514,7 @@ index f3eef07..14d1b17 100644
      strPos = 0;
  
      do
-@@ -1044,6 +1114,10 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
+@@ -1044,6 +1149,10 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
      lineWidth = 0;
      bufferPointer = NULL;
  
@@ -8464,7 +9525,7 @@ index f3eef07..14d1b17 100644
      while (*str != EOS)
      {
          switch (*str)
-@@ -1071,6 +1145,9 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
+@@ -1071,6 +1180,9 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
          case CHAR_DYNAMIC:
              if (bufferPointer == NULL)
                  bufferPointer = DynamicPlaceholderTextUtil_GetPlaceholderPtr(*++str);
@@ -8474,7 +9535,7 @@ index f3eef07..14d1b17 100644
              while (*bufferPointer != EOS)
              {
                  glyphWidth = func(*bufferPointer++, isJapanese);
-@@ -1196,7 +1273,11 @@ u8 RenderTextHandleBold(u8 *pixels, u8 fontId, u8 *str, int a3, int a4, int a5,
+@@ -1196,7 +1308,11 @@ u8 RenderTextHandleBold(u8 *pixels, u8 fontId, u8 *str, int a3, int a4, int a5,
      shadowColor = 3;
  
      GenerateFontHalfRowLookupTable(TEXT_COLOR_WHITE, TEXT_COLOR_TRANSPARENT, TEXT_COLOR_LIGHT_GRAY);
@@ -8486,7 +9547,7 @@ index f3eef07..14d1b17 100644
      strPos = 0;
  
      do
-@@ -1336,7 +1417,7 @@ u8 DrawKeypadIcon(u8 windowId, u8 keypadIconId, u16 x, u16 y)
+@@ -1336,7 +1452,7 @@ u8 DrawKeypadIcon(u8 windowId, u8 keypadIconId, u16 x, u16 y)
  {
      BlitBitmapRectToWindow(
          windowId,
@@ -8495,7 +9556,7 @@ index f3eef07..14d1b17 100644
          0,
          0,
          0x80,
-@@ -1369,7 +1450,12 @@ void DecompressGlyph_Small(u16 glyphId, bool32 isJapanese)
+@@ -1369,7 +1485,12 @@ void DecompressGlyph_Small(u16 glyphId, bool32 isJapanese)
  
      if (isJapanese == TRUE)
      {
@@ -8509,7 +9570,7 @@ index f3eef07..14d1b17 100644
          DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
          DecompressGlyphTile(glyphs + 0x80, (u16 *)(gGlyphInfo.pixels + 0x40));
          gGlyphInfo.width = 8;
-@@ -1377,7 +1463,12 @@ void DecompressGlyph_Small(u16 glyphId, bool32 isJapanese)
+@@ -1377,7 +1498,12 @@ void DecompressGlyph_Small(u16 glyphId, bool32 isJapanese)
      }
      else
      {
@@ -8523,7 +9584,7 @@ index f3eef07..14d1b17 100644
          DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
          DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x40));
          gGlyphInfo.width = sFontSmallLatinGlyphWidths[glyphId];
-@@ -1401,7 +1492,12 @@ static void DecompressGlyph_NormalCopy1(u16 glyphId, bool32 isJapanese)
+@@ -1401,7 +1527,12 @@ static void DecompressGlyph_NormalCopy1(u16 glyphId, bool32 isJapanese)
      {
          // This font only differs from the Normal font in Japanese
          int eff;
@@ -8537,7 +9598,7 @@ index f3eef07..14d1b17 100644
          DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
          DecompressGlyphTile(glyphs + 0x80, (u16 *)(gGlyphInfo.pixels + 0x40));
          gGlyphInfo.width = 8;
-@@ -1409,7 +1505,12 @@ static void DecompressGlyph_NormalCopy1(u16 glyphId, bool32 isJapanese)
+@@ -1409,7 +1540,12 @@ static void DecompressGlyph_NormalCopy1(u16 glyphId, bool32 isJapanese)
      }
      else
      {
@@ -8551,7 +9612,7 @@ index f3eef07..14d1b17 100644
          DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
          DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
          DecompressGlyphTile(glyphs + 0x10, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1449,7 +1550,12 @@ void DecompressGlyph_Normal(u16 glyphId, bool32 isJapanese)
+@@ -1449,7 +1585,12 @@ void DecompressGlyph_Normal(u16 glyphId, bool32 isJapanese)
          }
          else
          {
@@ -8565,7 +9626,7 @@ index f3eef07..14d1b17 100644
              DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
              DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
              DecompressGlyphTile(glyphs + 0x80, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1474,7 +1580,12 @@ void DecompressGlyph_Normal(u16 glyphId, bool32 isJapanese)
+@@ -1474,7 +1615,12 @@ void DecompressGlyph_Normal(u16 glyphId, bool32 isJapanese)
          }
          else
          {
@@ -8579,7 +9640,7 @@ index f3eef07..14d1b17 100644
              DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
              DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
              DecompressGlyphTile(glyphs + 0x10, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1522,7 +1633,12 @@ static void DecompressGlyph_NormalCopy2(u16 glyphId, bool32 isJapanese)
+@@ -1522,7 +1668,12 @@ static void DecompressGlyph_NormalCopy2(u16 glyphId, bool32 isJapanese)
          }
          else
          {
@@ -8593,7 +9654,7 @@ index f3eef07..14d1b17 100644
              DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
              DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
              DecompressGlyphTile(glyphs + 0x80, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1565,7 +1681,12 @@ static void DecompressGlyph_Male(u16 glyphId, bool32 isJapanese)
+@@ -1565,7 +1716,12 @@ static void DecompressGlyph_Male(u16 glyphId, bool32 isJapanese)
          }
          else
          {
@@ -8607,7 +9668,7 @@ index f3eef07..14d1b17 100644
              DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
              DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
              DecompressGlyphTile(glyphs + 0x80, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1590,7 +1711,12 @@ static void DecompressGlyph_Male(u16 glyphId, bool32 isJapanese)
+@@ -1590,7 +1746,12 @@ static void DecompressGlyph_Male(u16 glyphId, bool32 isJapanese)
          }
          else
          {
@@ -8621,7 +9682,7 @@ index f3eef07..14d1b17 100644
              DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
              DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
              DecompressGlyphTile(glyphs + 0x10, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1636,7 +1762,12 @@ void DecompressGlyph_Female(u16 glyphId, bool32 isJapanese)
+@@ -1636,7 +1797,12 @@ void DecompressGlyph_Female(u16 glyphId, bool32 isJapanese)
          }
          else
          {
@@ -8635,7 +9696,7 @@ index f3eef07..14d1b17 100644
              DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
              DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
              DecompressGlyphTile(glyphs + 0x80, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1661,7 +1792,12 @@ void DecompressGlyph_Female(u16 glyphId, bool32 isJapanese)
+@@ -1661,7 +1827,12 @@ void DecompressGlyph_Female(u16 glyphId, bool32 isJapanese)
          }
          else
          {
@@ -8649,7 +9710,7 @@ index f3eef07..14d1b17 100644
              DecompressGlyphTile(glyphs, (u16 *)gGlyphInfo.pixels);
              DecompressGlyphTile(glyphs + 0x8, (u16 *)(gGlyphInfo.pixels + 0x20));
              DecompressGlyphTile(glyphs + 0x10, (u16 *)(gGlyphInfo.pixels + 0x40));
-@@ -1687,7 +1823,14 @@ static s32 GetGlyphWidth_Female(u16 glyphId, bool32 isJapanese)
+@@ -1687,7 +1858,14 @@ static s32 GetGlyphWidth_Female(u16 glyphId, bool32 isJapanese)
  
  static void DecompressGlyph_Bold(u16 glyphId)
  {
@@ -8689,6 +9750,39 @@ index e425ccb..920e5a3 100644
      sTempTextPrinter.callback = callback;
      sTempTextPrinter.minLetterSpacing = 0;
      sTempTextPrinter.japanese = 0;
+diff --git a/src/tilemap_util.c b/src/tilemap_util.c
+index fe2f348..dea244e 100644
+--- a/src/tilemap_util.c
++++ b/src/tilemap_util.c
+@@ -2,6 +2,9 @@
+ #include "bg.h"
+ #include "tilemap_util.h"
+ #include "malloc.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ //  Handles 3 particular tilemaps ("PKMN Data" text, party menu, close box
+ //  button) used for Pokémon Storage System in a somewhat unusual way.
+@@ -222,7 +225,17 @@ static void TilemapUtil_Draw(u8 tilemapId)
+ {
+     int i;
+     int rowSize = sTilemapUtil[tilemapId].tileSize * sTilemapUtil[tilemapId].width;
+-    const void *tiles = sTilemapUtil[tilemapId].tilemap
++    const void *tilemap = sTilemapUtil[tilemapId].tilemap;
++    const void *tiles;
++
++#ifdef PORT_BRIDGE
++    // An INCBIN is a stub, and its rows are read one by one past it: from
++    // the loaded data, looked up now, while it is used (as Emerald 3DS's
++    // TilemapUtil_Draw in pokemon_storage_system.c).
++    if (Port_IsAssetStub(tilemap))
++        tilemap = Port_ResolveAssetPointerSized(tilemap, rowSize * sTilemapUtil[tilemapId].height);
++#endif
++    tiles = tilemap
+                         + rowSize * sTilemapUtil[tilemapId].cur.y
+                         + sTilemapUtil[tilemapId].cur.x * sTilemapUtil[tilemapId].tileSize;
+     for (i = 0; i < sTilemapUtil[tilemapId].cur.height; i++)
 diff --git a/src/tileset_anims.c b/src/tileset_anims.c
 index 04854a2..a4d9b60 100644
 --- a/src/tileset_anims.c
@@ -8773,6 +9867,75 @@ index 04854a2..a4d9b60 100644
      _InitSecondaryTilesetAnimation();
  }
  
+diff --git a/src/title_screen.c b/src/title_screen.c
+index 75f0e67..f7b6d0a 100644
+--- a/src/title_screen.c
++++ b/src/title_screen.c
+@@ -16,6 +16,9 @@
+ #include "berry_fix_program.h"
+ #include "decompress.h"
+ #include "constants/songs.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ enum TitleScreenScene
+ {
+@@ -816,6 +819,12 @@ static void Task_TitleScreen_BlinkPressStart(u8 taskId)
+ {
+     s16 *data = gTasks[taskId].data;
+     s32 i;
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: the colors are read from the asset.
++    const u16 *backgroundPals = Port_ResolveAssetPointerSized(gGraphics_TitleScreen_BackgroundPals, PLTT_SIZEOF(7));
++#else
++    const u16 *backgroundPals = gGraphics_TitleScreen_BackgroundPals;
++#endif
+ 
+     if (data[15] && gPaletteFade.active)
+         data[14] = 1;
+@@ -836,16 +845,16 @@ static void Task_TitleScreen_BlinkPressStart(u8 taskId)
+             {
+                 for (i = 0; i < 5; i++)
+                 {
+-                    gPlttBufferUnfaded[BG_PLTT_ID(15) + 1 + i] = gGraphics_TitleScreen_BackgroundPals[6];
+-                    gPlttBufferFaded[BG_PLTT_ID(15) + 1 + i] = gGraphics_TitleScreen_BackgroundPals[6];
++                    gPlttBufferUnfaded[BG_PLTT_ID(15) + 1 + i] = backgroundPals[6];
++                    gPlttBufferFaded[BG_PLTT_ID(15) + 1 + i] = backgroundPals[6];
+                 }
+             }
+             else
+             {
+                 for (i = 0; i < 5; i++)
+                 {
+-                    gPlttBufferUnfaded[BG_PLTT_ID(15) + 1 + i] = gGraphics_TitleScreen_BackgroundPals[1 + i];
+-                    gPlttBufferFaded[BG_PLTT_ID(15) + 1 + i] = gGraphics_TitleScreen_BackgroundPals[1 + i];
++                    gPlttBufferUnfaded[BG_PLTT_ID(15) + 1 + i] = backgroundPals[1 + i];
++                    gPlttBufferFaded[BG_PLTT_ID(15) + 1 + i] = backgroundPals[1 + i];
+                 }
+             }
+             if (data[14])
+diff --git a/src/trade_scene.c b/src/trade_scene.c
+index 98d1290..0b526d0 100644
+--- a/src/trade_scene.c
++++ b/src/trade_scene.c
+@@ -2825,14 +2825,14 @@ static void Task_AnimateWirelessSignal(u8 taskId)
+         if (paletteIdx == 0x100)
+             LoadPalette(sWirelessSignalAnimPals_Off, BG_PLTT_ID(3), PLTT_SIZE_4BPP);
+         else
+-            LoadPalette(&sWirelessSignalAnimPals_Outbound[paletteIdx], BG_PLTT_ID(3), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(sWirelessSignalAnimPals_Outbound, (paletteIdx) * sizeof(sWirelessSignalAnimPals_Outbound[0]), BG_PLTT_ID(3), PLTT_SIZE_4BPP);
+     }
+     else
+     {
+         if (paletteIdx == 0x100)
+             LoadPalette(sWirelessSignalAnimPals_Off, BG_PLTT_ID(3), PLTT_SIZE_4BPP);
+         else
+-            LoadPalette(&sWirelessSignalAnimPals_Inbound[paletteIdx], BG_PLTT_ID(3), PLTT_SIZE_4BPP);
++            LoadPaletteWithOffset(sWirelessSignalAnimPals_Inbound, (paletteIdx) * sizeof(sWirelessSignalAnimPals_Inbound[0]), BG_PLTT_ID(3), PLTT_SIZE_4BPP);
+     }
+ 
+     if (sWirelessSignalAnimParams[tIdx][0] == 0 && tCounter == 0)
 diff --git a/src/trainer_card.c b/src/trainer_card.c
 index ab959d6..8958f13 100644
 --- a/src/trainer_card.c
@@ -8834,3 +9997,23 @@ index 91bd92c..67fe2a1 100644
  static EWRAM_DATA u8 sPlayerCurrActivity = 0;
  static EWRAM_DATA u8 sPlayerActivityGroupSize = 0;
  static EWRAM_DATA union
+diff --git a/src/union_room_chat_objects.c b/src/union_room_chat_objects.c
+index d7e26a4..2fc2263 100644
+--- a/src/union_room_chat_objects.c
++++ b/src/union_room_chat_objects.c
+@@ -240,9 +240,15 @@ void UnionRoomChat_MoveSelectorCursorObj(void)
+ 
+ void UnionRoomChat_UpdateObjPalCycle(int arg0)
+ {
++#ifdef PORT_BRIDGE
++    // The INCBIN is a stub: two colors at an offset into the asset.
++    u8 index = IndexOfSpritePaletteTag(0);
++    LoadPaletteWithOffset(sUnionRoomChatInterfacePal, PLTT_SIZEOF(arg0 * 2 + 1), OBJ_PLTT_ID(index) + 1, PLTT_SIZEOF(2));
++#else
+     const u16 *palette = &sUnionRoomChatInterfacePal[arg0 * 2 + 1];
+     u8 index = IndexOfSpritePaletteTag(0);
+     LoadPalette(palette, OBJ_PLTT_ID(index) + 1, PLTT_SIZEOF(2));
++#endif
+ }
+ 
+ void UnionRoomChat_SetSelectorCursorClosedImage(void)
