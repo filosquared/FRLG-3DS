@@ -38,6 +38,56 @@ GENERATE_ON_DEMAND_PREFIXES = (
 )
 
 
+# The game version a FireRed/LeafGreen tree is built as (--game-version): its
+# sources choose art with #ifdef FIRERED / LEAFGREEN, one symbol per version.
+GAME_VERSION: str | None = None
+_VERSIONS = ("FIRERED", "LEAFGREEN")
+_COND = re.compile(r"^\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b(.*)$")
+
+
+def _version_test(kind: str, rest: str) -> bool | None:
+    """True/False for a condition on the game version alone, else None."""
+    rest = re.sub(r"//.*|/\*.*?\*/", "", rest).strip()
+    if kind in ("ifdef", "ifndef"):
+        if rest in _VERSIONS:
+            return (rest == GAME_VERSION) == (kind == "ifdef")
+        return None
+    m = re.fullmatch(r"(!)?\s*defined\s*\(?\s*(\w+)\s*\)?", rest)
+    if m and m.group(2) in _VERSIONS:
+        return (m.group(2) == GAME_VERSION) != bool(m.group(1))
+    return None
+
+
+def strip_other_versions(text: str) -> str:
+    """Blank the branches of version conditionals the build does not take."""
+    if GAME_VERSION is None:
+        return text
+    out = []
+    # Per open conditional: None (not about the version: kept whole), or
+    # [taking this branch, a branch already taken].
+    stack: list = []
+    for line in text.split("\n"):
+        m = _COND.match(line)
+        if m:
+            kind, rest = m.group(1), m.group(2)
+            if kind in ("ifdef", "ifndef", "if"):
+                t = _version_test(kind, rest)
+                stack.append(None if t is None else [t, t])
+            elif kind == "elif" and stack and stack[-1] is not None:
+                t = _version_test("if", rest)
+                taken = stack[-1][1]
+                stack[-1] = [bool(t) and not taken, taken or bool(t)]
+            elif kind == "else" and stack and stack[-1] is not None:
+                stack[-1] = [not stack[-1][1], True]
+            elif kind == "endif" and stack:
+                stack.pop()
+            out.append("")
+            continue
+        live = all(f is None or f[0] for f in stack)
+        out.append(line if live else "")
+    return "\n".join(out)
+
+
 def parse_incbins_by_source() -> list[tuple[Path, str, list[str], bool]]:
     # `static` must be part of the match: several files declare a private symbol
     # with the same name (sPokeball_Gfx, sCursor_Gfx, ...). Without it they look
@@ -59,7 +109,7 @@ def parse_incbins_by_source() -> list[tuple[Path, str, list[str], bool]]:
     src_root = ROOT / "src"
     files = sorted(list(src_root.rglob("*.c")) + list(src_root.rglob("*.h")))
     for src_path in files:
-        text = src_path.read_text(encoding="utf-8", errors="ignore")
+        text = strip_other_versions(src_path.read_text(encoding="utf-8", errors="ignore"))
         seen: set[str] = set()
 
         for m in direct_pattern.finditer(text):
@@ -223,7 +273,11 @@ def configure(argv: list[str] | None = None) -> None:
     parser.add_argument("--map", default=None, help="linker map of the port executable")
     parser.add_argument("--fs-dir", default=None, help="root of the packaged filesystem")
     parser.add_argument("--uri-prefix", default=URI_PREFIX, help="prefix written before every path")
+    parser.add_argument("--game-version", choices=_VERSIONS, default=None,
+                        help="FireRed/LeafGreen tree: the version whose art the build uses")
     args = parser.parse_args(argv)
+    global GAME_VERSION
+    GAME_VERSION = args.game_version
 
     PORT_DIR = Path(args.port_dir).resolve()
     MAP_FILE = Path(args.map).resolve() if args.map else PORT_DIR / "build" / "emerald3ds.map"
