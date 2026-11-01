@@ -23,6 +23,12 @@ ASFLAGS := -mcpu=mpcore --defsym MODERN=1 --defsym PORTABLE=1 --defsym UBFIX=1 -
 # hooks in the shared tree that route resources, scripts and saves to the
 # ARM11 backend are compiled in with PORT_BRIDGE.
 BRIDGE_FLAGS := -DPORT_BRIDGE
+ifeq ($(FRLG),1)
+# FireRed's data asks the assembler for its version and revision (.ifdef
+# FIRERED, .if REVISION), as its own Makefile does; cpp gets no -D for them,
+# or .ifdef FIRERED would read .ifdef 1.
+ASFLAGS += --defsym $(GAME_VERSION)=1 --defsym REVISION=$(GAME_REVISION) --defsym ENGLISH=1
+endif
 
 # The compile runs from the repository root (preproc resolves charmap and
 # include paths there), so every search path is absolute.
@@ -160,6 +166,12 @@ ROMFS_SHADER_OUTS += romfs/bottom/menu.bin
 # The battle's info boxes and text box: the port's own art (scripts/gen_battle_hud.py).
 ROMFS_SHADER_OUTS += romfs/battle/hud.bin
 
+ifeq ($(FRLG),1)
+# Kanto has no voxel models yet (docs/FIRERED_PORT.md, milestone 5): the
+# generators read Hoenn's specs, and the world draws without these files.
+ROMFS_SHADER_OUTS := $(filter-out romfs/voxel/regions.bin romfs/voxel/signposts.bin \
+	romfs/voxel/buildings.bin romfs/voxel/relief.bin,$(ROMFS_SHADER_OUTS))
+endif
 FULL_OBJECTS := $(FULL_C_OBJS) $(FULL_DATA_OBJS) $(BACKEND_OBJS)
 # The keep table is only referenced from the payload, which is not linked,
 # so it has to be a garbage-collection root or it takes the handlers with it.

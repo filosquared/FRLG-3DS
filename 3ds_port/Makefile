@@ -171,7 +171,7 @@ OBJECTS += $(FULL_OBJECTS)
 # the build options. Its own object, rewritten only when one of them changes,
 # so a commit relinks without recompiling anything else.
 BUILDINFO_PATHS := . ../src ../include ../data ../constants ':!*.md'
-BUILDINFO_DEFINES := $(sort $(filter -D%,$(CPPFLAGS) $(GAMEFLAGS)))
+BUILDINFO_DEFINES := $(sort $(filter-out -DCTR_APP_NAME=%,$(filter -D%,$(CPPFLAGS) $(GAMEFLAGS))))
 OBJECTS += build/buildinfo.o
 build/buildinfo.c: FORCE
 	@mkdir -p build
