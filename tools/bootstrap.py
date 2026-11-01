@@ -10,6 +10,7 @@
     python tools/bootstrap.py --make --japanese-rom emerald-ja.gba # Japanese (BPEJ) build
     python tools/bootstrap.py --make --port-lang pt_br   # Brazilian Portuguese over the English game
     python tools/bootstrap.py --make --german-rom smaragd.gba      # German (BPED) build
+    python tools/bootstrap.py --game firered      # FireRed: pret/pokefirered -> build/upstream-firered
 
 1. Reads upstream.lock and fetches exactly that commit of pret/pokeemerald into
    build/upstream (a shallow fetch of one commit).
@@ -30,6 +31,9 @@
 6. With --port-lang pt_br: the port's own interface (bottom screen labels,
    extras, data pack errors) in Brazilian Portuguese, and the game's texts
    from tools/locales/pt_br (tools/localize_portuguese.py, docs/PORTUGUESE.md).
+7. With --game firered (work in progress, docs/FIRERED_PORT.md): the pinned
+   pret/pokefirered of upstream.lock [pokefirered] instead, its assembly made
+   cpp-safe by tools/frlg/asm_cpp_syntax.py, then patches/pokefirered/*.patch.
 """
 
 from __future__ import annotations
@@ -84,7 +88,10 @@ def fetch(tree: Path, repo: str, commit: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--dir", type=Path, default=ROOT / "build" / "upstream")
+    ap.add_argument("--game", choices=["emerald", "firered"], default="emerald",
+                    help="which decompilation to build on (firered: work in progress)")
+    ap.add_argument("--dir", type=Path, default=None,
+                    help="tree to build in (default build/upstream, build/upstream-firered)")
     ap.add_argument("--clean", action="store_true", help="reset the tree to the pinned commit first")
     ap.add_argument("--spanish-rom", type=Path, help="stage the Spanish data from a clean BPES ROM")
     ap.add_argument("--french-rom", type=Path, help="stage the French data from a clean BPEF ROM")
@@ -102,8 +109,15 @@ def main() -> int:
         ap.error("--port-lang pt_br goes over the English game, not the Spanish, French, Italian, "
                  "German or Japanese one")
 
+    firered = args.game == "firered"
+    if firered and (args.spanish_rom or args.french_rom or args.italian_rom or args.german_rom
+                    or args.japanese_rom or args.port_lang != "en"):
+        ap.error("--game firered has no localisation yet")
+    if args.dir is None:
+        args.dir = ROOT / "build" / ("upstream-firered" if firered else "upstream")
     lock = tomllib.loads((ROOT / "upstream.lock").read_text(encoding="utf-8"))
-    repo, commit = lock["pokeemerald"]["repository"], lock["pokeemerald"]["commit"]
+    upstream = "pokefirered" if firered else "pokeemerald"
+    repo, commit = lock[upstream]["repository"], lock[upstream]["commit"]
     tree = args.dir.resolve()
     previous_locale = (tree / ".emerald3ds-locale").exists()
     previous_name = (tree / ".emerald3ds-locale").read_text(encoding="utf-8").strip() if previous_locale else ""
@@ -119,7 +133,7 @@ def main() -> int:
     elif args.japanese_rom:
         locale = ("japanese", args.japanese_rom, "localize_japanese.py", "japanese.json.gz")
     portuguese = args.port_lang == "pt_br"
-    patches = sorted((ROOT / "patches" / "pokeemerald").glob("*.patch"))
+    patches = sorted((ROOT / "patches" / upstream).glob("*.patch"))
     marker = tree / ".emerald3ds-patches"
     digest = patch_digest(patches)
 
@@ -165,6 +179,12 @@ def main() -> int:
                             ["git", "ls-files", "--error-unmatch", line[6:]], cwd=tree,
                             capture_output=True).returncode != 0:
                         created.unlink()
+        if firered:
+            # The 3DS build feeds the game's assembly through cpp; the patches
+            # are made against the converted tree (tools/frlg/asm_cpp_syntax.py).
+            asm = [str(p) for d in ("asm/macros", "constants", "data", "sound")
+                   for p in sorted((tree / d).rglob("*")) if p.suffix in (".s", ".inc") and p.is_file()]
+            run([sys.executable, ROOT / "tools/frlg/asm_cpp_syntax.py", *asm])
         for patch in patches:
             run(["git", "apply", "--whitespace=nowarn", patch], cwd=tree)
         marker.write_text(digest + "\n")

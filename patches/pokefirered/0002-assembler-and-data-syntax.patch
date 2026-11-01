@@ -1,0 +1,103 @@
+FireRed 3DS changes to pret/pokefirered ce6406d8c2eaf46d543c8a2606de0c3cb1951982: assembler and data syntax
+Applied by tools/bootstrap.py --game firered, after tools/frlg/asm_cpp_syntax.py.
+
+diff --git a/data/battle_ai_scripts.s b/data/battle_ai_scripts.s
+index 8aea69c..47e101b 100644
+--- a/data/battle_ai_scripts.s
++++ b/data/battle_ai_scripts.s
+@@ -8,7 +8,7 @@
+ #include "constants/pokemon.h"
+ 	.include "asm/macros/battle_ai_script.inc"
+ 
+-	.section script_data, "aw", %progbits
++	.section script_data, "aw"
+ 
+ /* The FRLG scripts are improved subtly by Emerald in a few places*/
+ /* To make adding these improvements easier they are commented and tagged with "Improvement in Emerald"*/
+diff --git a/data/battle_anim_scripts.s b/data/battle_anim_scripts.s
+index 076f520..3373457 100644
+--- a/data/battle_anim_scripts.s
++++ b/data/battle_anim_scripts.s
+@@ -9,7 +9,7 @@
+ 	.include "asm/macros/battle_anim_script.inc"
+ 	.include "constants/constants.inc"
+ 
+-	.section script_data, "aw", %progbits
++	.section script_data, "aw"
+ 
+ 	.align 2
+ gMovesWithQuietBGM::
+diff --git a/data/battle_scripts_1.s b/data/battle_scripts_1.s
+index 886fe70..31b771c 100644
+--- a/data/battle_scripts_1.s
++++ b/data/battle_scripts_1.s
+@@ -17,7 +17,7 @@
+ 	.set NULL, 0
+ 	.set FALSE, 0
+ 	.set TRUE, 1
+-	.section script_data, "aw", %progbits
++	.section script_data, "aw"
+ 	.align 2
+ 
+ gBattleScriptsForMoveEffects::
+diff --git a/data/battle_scripts_2.s b/data/battle_scripts_2.s
+index 235ed0c..b6d1e50 100644
+--- a/data/battle_scripts_2.s
++++ b/data/battle_scripts_2.s
+@@ -15,7 +15,7 @@
+ 	.set NULL, 0
+ 	.set FALSE, 0
+ 	.set TRUE, 1
+-	.section script_data, "aw", %progbits
++	.section script_data, "aw"
+ 	.align 2
+ 
+ gBattlescriptsForBallThrow::
+diff --git a/data/event_scripts.s b/data/event_scripts.s
+index 0f8c53b..559bf2e 100644
+--- a/data/event_scripts.s
++++ b/data/event_scripts.s
+@@ -43,7 +43,7 @@
+ 	.set FALSE, 0
+ 	.set TRUE,  1
+ 
+-	.section script_data, "aw", %progbits
++	.section script_data, "aw"
+ 
+ 	.include "data/script_cmd_table.inc"
+ 
+diff --git a/data/field_effect_scripts.s b/data/field_effect_scripts.s
+index 8963448..ea17bff 100644
+--- a/data/field_effect_scripts.s
++++ b/data/field_effect_scripts.s
+@@ -1,5 +1,5 @@
+ 	.include "asm/macros/field_effect_script.inc"
+-	.section script_data, "aw", %progbits
++	.section script_data, "aw"
+ 	.align 2
+ gFieldEffectScriptPointers::
+ 	.int gFldEffScript_ExclamationMarkIcon     /* FLDEFF_EXCLAMATION_MARK_ICON*/
+diff --git a/data/mystery_event_script_cmd_table.s b/data/mystery_event_script_cmd_table.s
+index cb241ce..d8595f7 100644
+--- a/data/mystery_event_script_cmd_table.s
++++ b/data/mystery_event_script_cmd_table.s
+@@ -1,4 +1,4 @@
+-	.section script_data, "aw", %progbits
++	.section script_data, "aw"
+ 
+ 	.align 2
+ gMysteryEventScriptCmdTable::
+diff --git a/data/specials.inc b/data/specials.inc
+index 859ad38..7dbdc0c 100644
+--- a/data/specials.inc
++++ b/data/specials.inc
+@@ -7,7 +7,8 @@
+ 
+ .set __special__, 0
+ 	.align 2
+-gSpecials::
++	.global gSpecials
++gSpecials:
+ 	def_special HealPlayerParty
+ 	def_special SetCableClubWarp
+ 	def_special DoCableClubWarp

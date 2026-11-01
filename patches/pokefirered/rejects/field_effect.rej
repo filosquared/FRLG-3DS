@@ -1,0 +1,189 @@
+--- src/field_effect.c
++++ src/field_effect.c
+@@ -333,7 +339,7 @@ static const struct OamData sOam_16x16 =
+ 
+ static const struct SpriteFrameImage sPicTable_NewGameBirch[] =
+ {
+-    obj_frame_tiles(sNewGameBirch_Gfx)
++    {.data = sNewGameBirch_Gfx, .size = 0x800}
+ };
+ 
+ static const struct SpritePalette sSpritePalette_NewGameBirch =
+@@ -702,7 +708,14 @@ u32 FieldEffectStart(u8 id)
+ 
+     FieldEffectActiveListAdd(id);
+ 
++#ifdef PORT_BRIDGE
++    {
++        u8 *const *scriptTable = (u8 *const *)Port_ResolveEventPointer(gFieldEffectScriptPointers);
++        script = (u8 *)Port_ResolveScriptPointer(scriptTable[id]);
++    }
++#else
+     script = gFieldEffectScriptPointers[id];
++#endif
+ 
+     while (gFieldEffectScriptFuncs[*script](&script, &val))
+         ;
+@@ -913,7 +936,13 @@ u8 CreateTrainerSprite(u8 trainerSpriteID, s16 x, s16 y, u8 subpriority, u8 *buf
+     spriteTemplate.images = NULL;
+     spriteTemplate.affineAnims = gDummySpriteAffineAnimTable;
+     spriteTemplate.callback = SpriteCallbackDummy;
+-    return CreateSprite(&spriteTemplate, x, y, subpriority);
++    {
++        u8 spriteId = CreateSprite(&spriteTemplate, x, y, subpriority);
++#ifdef PORT_BRIDGE
++        Port_SetBirchDebugEx(0x000B, spriteId, trainerSpriteID, gSprites[spriteId].oam.tileNum | (gSprites[spriteId].oam.paletteNum << 8), gSprites[spriteId].invisible | (gSprites[spriteId].oam.priority << 8));
++#endif
++        return spriteId;
++    }
+ }
+ 
+ static void UNUSED LoadTrainerGfx_TrainerCard(u8 gender, u16 palOffset, u8 *dest)
+@@ -925,7 +954,16 @@ static void UNUSED LoadTrainerGfx_TrainerCard(u8 gender, u16 palOffset, u8 *dest
+ u8 AddNewGameBirchObject(s16 x, s16 y, u8 subpriority)
+ {
+     LoadSpritePalette(&sSpritePalette_NewGameBirch);
+-    return CreateSprite(&sSpriteTemplate_NewGameBirch, x, y, subpriority);
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebug(0x0008, x, y, subpriority);
++#endif
++    {
++        u8 spriteId = CreateSprite(&sSpriteTemplate_NewGameBirch, x, y, subpriority);
++#ifdef PORT_BRIDGE
++        Port_SetBirchDebugEx(0x000C, spriteId, gSprites[spriteId].oam.tileNum | (gSprites[spriteId].oam.paletteNum << 8), gSprites[spriteId].invisible | (gSprites[spriteId].oam.priority << 8), gSprites[spriteId].x | (gSprites[spriteId].y << 8));
++#endif
++        return spriteId;
++    }
+ }
+ 
+ u8 CreateMonSprite_PicBox(u16 species, s16 x, s16 y, u8 subpriority)
+@@ -2698,8 +2803,9 @@ static void FieldMoveShowMonOutdoorsEffect_Init(struct Task *task)
+     task->data[11] = REG_WININ;
+     task->data[12] = REG_WINOUT;
+     StoreWordInTwoHalfwords((u16*) &task->data[13], (u32)gMain.vblankCallback);
+-    task->tWinHoriz = WIN_RANGE(DISPLAY_WIDTH, DISPLAY_WIDTH + 1);
++    task->tWinHoriz = SHOW_MON_WIN_CLOSED;
+     task->tWinVert = WIN_RANGE(DISPLAY_HEIGHT / 2, DISPLAY_HEIGHT / 2 + 1);
++    task->tBgVert = -SHOW_MON_BANNER_DROP;
+     task->tWinIn = WININ_WIN0_BG_ALL | WININ_WIN0_OBJ | WININ_WIN0_CLR;
+     task->tWinOut = WINOUT_WIN01_BG1 | WINOUT_WIN01_BG2 | WINOUT_WIN01_BG3 | WINOUT_WIN01_OBJ | WINOUT_WIN01_CLR;
+     SetGpuReg(REG_OFFSET_WIN0H, task->tWinHoriz);
+@@ -2740,15 +2849,15 @@ static void FieldMoveShowMonOutdoorsEffect_CreateBanner(struct Task *task)
+     if (horiz < 0)
+         horiz = 0;
+ 
+-    if (vertHi < DISPLAY_HEIGHT / 4)
+-        vertHi = DISPLAY_HEIGHT / 4;
++    if (vertHi < SHOW_MON_BANNER_TOP)
++        vertHi = SHOW_MON_BANNER_TOP;
+ 
+-    if (vertLo > DISPLAY_WIDTH / 2)
+-        vertLo = DISPLAY_WIDTH / 2;
++    if (vertLo > SHOW_MON_BANNER_END)
++        vertLo = SHOW_MON_BANNER_END;
+ 
+     task->tWinHoriz = (horiz << 8) | (task->tWinHoriz & 0xff);
+     task->tWinVert = (vertHi << 8) | vertLo;
+-    if (horiz == 0 && vertHi == DISPLAY_HEIGHT / 4 && vertLo == DISPLAY_WIDTH / 2)
++    if (horiz == 0 && vertHi == SHOW_MON_BANNER_TOP && vertLo == SHOW_MON_BANNER_END)
+     {
+         gSprites[task->tMonSpriteId].callback = SpriteCB_FieldMoveMonSlideOnscreen;
+         task->tState++;
+@@ -2789,7 +2898,7 @@ static void FieldMoveShowMonOutdoorsEffect_RestoreBg(struct Task *task)
+ {
+     u16 bg0cnt = (REG_BG0CNT >> 8) << 11;
+     CpuFill32(0, (void *)VRAM + bg0cnt, 0x800);
+-    task->tWinHoriz = DISPLAY_WIDTH + 1;
++    task->tWinHoriz = SHOW_MON_WIN_FULL;
+     task->tWinVert = DISPLAY_HEIGHT + 1;
+     task->tWinIn = task->data[11];
+     task->tWinOut = task->data[12];
+@@ -2828,10 +2940,16 @@ static void LoadFieldMoveOutdoorStreaksTilemap(u16 offs)
+ {
+     u16 i;
+     u16 *dest;
++    const u16 *tilemap = sFieldMoveStreaksOutdoors_Tilemap;
++#ifdef PORT_BRIDGE
++    // An INCBIN is a stub resolved by address: read element by element it is
++    // the neighbouring stubs, and the banner came out empty.
++    tilemap = Port_ResolveAssetPointerSized(tilemap, sizeof(sFieldMoveStreaksOutdoors_Tilemap));
++#endif
+     dest = (u16 *)(VRAM + ARRAY_COUNT(sFieldMoveStreaksOutdoors_Tilemap) + offs);
+     for (i = 0; i < ARRAY_COUNT(sFieldMoveStreaksOutdoors_Tilemap); i++, dest++)
+     {
+-        *dest = sFieldMoveStreaksOutdoors_Tilemap[i] | 0xF000;
++        *dest = tilemap[i] | 0xF000;
+     }
+ }
+ 
+@@ -2869,10 +2987,16 @@ static void Task_FieldMoveShowMonIndoors(u8 taskId)
+ 
+ static void FieldMoveShowMonIndoorsEffect_Init(struct Task *task)
+ {
++#if defined(PLATFORM_3DS)
++    task->tBgVert = -SHOW_MON_BANNER_DROP;
++#endif
+     SetGpuReg(REG_OFFSET_BG0HOFS, task->tBgHoriz);
+     SetGpuReg(REG_OFFSET_BG0VOFS, task->tBgVert);
+     StoreWordInTwoHalfwords((u16 *)&task->data[13], (u32)gMain.vblankCallback);
+     SetVBlankCallback(VBlankCB_FieldMoveShowMonIndoors);
++#if defined(PLATFORM_3DS)
++    CtrVideo_SetFieldBanner(TRUE);
++#endif
+     task->tState++;
+ }
+ 
+@@ -2893,8 +3017,8 @@ static void FieldMoveShowMonIndoorsEffect_SlideBannerOn(struct Task *task)
+ {
+     if (SlideIndoorBannerOnscreen(task))
+     {
+-        SetGpuReg(REG_OFFSET_WIN1H, WIN_RANGE(0, DISPLAY_WIDTH));
+-        SetGpuReg(REG_OFFSET_WIN1V, WIN_RANGE(DISPLAY_HEIGHT / 4, DISPLAY_HEIGHT - DISPLAY_HEIGHT / 4));
++        SetGpuReg(REG_OFFSET_WIN1H, WIN_RANGE(0, SHOW_MON_WIN_RIGHT));
++        SetGpuReg(REG_OFFSET_WIN1V, WIN_RANGE(SHOW_MON_BANNER_TOP, SHOW_MON_BANNER_END));
+         gSprites[task->tMonSpriteId].callback = SpriteCB_FieldMoveMonSlideOnscreen;
+         task->tState++;
+     }
+@@ -2982,10 +3114,10 @@ static bool8 SlideIndoorBannerOnscreen(struct Task *task)
+         dest = (u16 *)(VRAM + 0x140 + (u16)task->data[12]);
+         for (i = 0; i < 10; i++)
+         {
+-            dest[dstOffs + i * 32] = sFieldMoveStreaksIndoors_Tilemap[srcOffs + i * 32];
++            dest[dstOffs + i * 32] = tilemap[srcOffs + i * 32];
+             dest[dstOffs + i * 32] |= 0xf000;
+ 
+-            dest[((dstOffs + 1) & 0x1f) + i * 32] = sFieldMoveStreaksIndoors_Tilemap[((srcOffs + 1) & 0x1f) + i * 32] | 0xf000;
++            dest[((dstOffs + 1) & 0x1f) + i * 32] = tilemap[((srcOffs + 1) & 0x1f) + i * 32] | 0xf000;
+             dest[((dstOffs + 1) & 0x1f) + i * 32] |= 0xf000;
+         }
+         task->tBgOffset += 2;
+@@ -3031,7 +3163,7 @@ static u8 InitFieldMoveMonSprite(u32 species, u32 otId, u32 personality)
+     struct Sprite *sprite;
+     noDucking = (species & SHOW_MON_CRY_NO_DUCKING) >> 16;
+     species &= ~SHOW_MON_CRY_NO_DUCKING;
+-    monSprite = CreateMonSprite_FieldMove(species, otId, personality, 320, 80, 0);
++    monSprite = CreateMonSprite_FieldMove(species, otId, personality, SHOW_MON_START_X, DISPLAY_HEIGHT / 2, 0);
+     sprite = &gSprites[monSprite];
+     sprite->callback = SpriteCallbackDummy;
+     sprite->oam.priority = 0;
+@@ -3415,7 +3547,11 @@ static void StartFlyBirdSwoopDown(u8 spriteId)
+     struct Sprite *sprite;
+     sprite = &gSprites[spriteId];
+     sprite->callback = SpriteCB_FlyBirdSwoopDown;
++#if defined(PLATFORM_3DS)
++    sprite->x = 240 / 2; // on the GBA picture (FieldEffect_IsFlySprite)
++#else
+     sprite->x = DISPLAY_WIDTH / 2;
++#endif
+     sprite->y = 0;
+     sprite->x2 = 0;
+     sprite->y2 = 0;
+@@ -3480,7 +3616,7 @@ static void SpriteCB_FlyBirdLeaveBall(struct Sprite *sprite)
+ 
+ static void SpriteCB_FlyBirdSwoopDown(struct Sprite *sprite)
+ {
+-    sprite->x2 = Cos(sprite->data[2], 0x8c);
++    sprite->x2 = FlySwoopX(sprite->data[2]);
+     sprite->y2 = Sin(sprite->data[2], 0x48);
+     sprite->data[2] = (sprite->data[2] + 4) & 0xff;
+     if (sprite->sPlayerSpriteId != MAX_SPRITES)

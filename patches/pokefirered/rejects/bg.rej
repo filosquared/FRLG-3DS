@@ -1,0 +1,16 @@
+--- src/bg.c
++++ src/bg.c
+@@ -1278,10 +1318,9 @@ bool32 IsInvalidBg32(u8 bg)
+ 
+ bool32 IsTileMapOutsideWram(u8 bg)
+ {
++#ifndef PORTABLE
+     if (sGpuBgConfigs2[bg].tilemap > (void *)IWRAM_END)
+         return TRUE;
+-    else if (sGpuBgConfigs2[bg].tilemap == NULL)
+-        return TRUE;
+-    else
+-        return FALSE;
++#endif
++    return sGpuBgConfigs2[bg].tilemap == NULL;
+ }

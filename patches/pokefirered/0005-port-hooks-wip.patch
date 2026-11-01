@@ -1,0 +1,5200 @@
+FireRed 3DS changes to pret/pokefirered ce6406d8c2eaf46d543c8a2606de0c3cb1951982: port hooks (work in progress: field and battle hooks still being ported, see docs/FIRERED_PORT.md)
+Applied by tools/bootstrap.py --game firered, after tools/frlg/asm_cpp_syntax.py.
+
+diff --git a/include/battle_controllers.h b/include/battle_controllers.h
+index 334485c..7274e25 100644
+--- a/include/battle_controllers.h
++++ b/include/battle_controllers.h
+@@ -307,4 +307,20 @@ void SetControllerToLinkOpponent(void);
+ // link partner controller
+ void SetControllerToLinkPartner(void);
+ 
++#ifdef PLATFORM_3DS
++// 3DS bottom screen (3ds_port/src/3ds_bottom_ui.c): the action, move and
++// target menus live there. The controllers keep their logic; these turn the
++// bottom screen's taps and its own button order into the keys they read.
++bool8 CtrBattleMenu_Active(void);
++void CtrBattleMenu_Begin(void);
++// A menu the controller answers by itself (Wally's catching lesson): shown
++// on the bottom screen every frame it waits, taking no input.
++void CtrBattleMenu_ShowAction(void);
++void CtrBattleMenu_ShowMove(void);
++void CtrBattleMenu_ActionInput(u8 *cursor, bool8 safari);
++void CtrBattleMenu_MoveInput(u8 *cursor, const u16 *moves);
++void CtrBattleMenu_TargetInput(void);
++void CtrBattleMenu_ShowPrompt(void);
++#endif
++
+ #endif // GUARD_BATTLE_CONTROLLERS_H
+diff --git a/include/blit.h b/include/blit.h
+index 78f6776..7e75159 100644
+--- a/include/blit.h
++++ b/include/blit.h
+@@ -8,6 +8,8 @@ struct Bitmap
+     u32 height:16;
+ };
+ 
++// Pass the original asset base, not an interior pointer; offset is in bytes.
++const u8 *ResolveBitmapSource(const u8 *base, u32 offset);
+ void BlitBitmapRect4BitWithoutColorKey(const struct Bitmap *src, struct Bitmap *dst, u16 srcX, u16 srcY, u16 dstX, u16 dstY, u16 width, u16 height);
+ void BlitBitmapRect4Bit(const struct Bitmap *src, struct Bitmap *dst, u16 srcX, u16 srcY, u16 dstX, u16 dstY, u16 width, u16 height, u8 colorKey);
+ void FillBitmapRect4Bit(struct Bitmap *surface, u16 x, u16 y, u16 width, u16 height, u8 fillValue);
+diff --git a/include/gba/macro.h b/include/gba/macro.h
+index 33150f8..bff7511 100644
+--- a/include/gba/macro.h
++++ b/include/gba/macro.h
+@@ -9,7 +9,7 @@
+            CPU_SET_##bit##BIT | CPU_SET_SRC_FIXED | ((size)/(bit/8) & 0x1FFFFF)); \
+ }
+ 
+-#if MODERN
++#if MODERN && !defined(PORTABLE)
+ #define CPU_FILL(value, dest, size, bit) \
+     do \
+     { \
+@@ -25,7 +25,7 @@
+ 
+ #define CPU_COPY_UNCHECKED(src, dest, size, bit) CpuSet(src, dest, CPU_SET_##bit##BIT | ((size)/(bit/8) & 0x1FFFFF))
+ 
+-#if MODERN
++#if MODERN && !defined(PORTABLE)
+ #define CPU_COPY(src, dest, size, bit) \
+     do \
+     { \
+@@ -92,7 +92,7 @@ extern void DmaSet(int dmaNum, const void * src, void * dest, u32 control);
+          | ((size)/(bit/8)));                                                                 \
+ }
+ 
+-#if MODERN
++#if MODERN && !defined(PORTABLE)
+ #define DMA_FILL(dmaNum, value, dest, size, bit) \
+     do \
+     { \
+@@ -123,7 +123,7 @@ extern void DmaSet(int dmaNum, const void * src, void * dest, u32 control);
+     DmaFill##bit(dmaNum, 0, _dest, _size);  \
+ }
+ 
+-#if MODERN
++#if MODERN && !defined(PORTABLE)
+ #define DMA_CLEAR(dmaNum, dest, size, bit) \
+     do \
+     { \
+@@ -144,7 +144,7 @@ extern void DmaSet(int dmaNum, const void * src, void * dest, u32 control);
+            (DMA_ENABLE | DMA_START_NOW | DMA_##bit##BIT | DMA_SRC_INC | DMA_DEST_INC) << 16 \
+          | ((size)/(bit/8)))
+ 
+-#if MODERN
++#if MODERN && !defined(PORTABLE)
+ #define DMA_COPY(dmaNum, src, dest, size, bit) \
+     do \
+     { \
+diff --git a/include/global.berry.h b/include/global.berry.h
+index 148bbc9..bebf6c0 100644
+--- a/include/global.berry.h
++++ b/include/global.berry.h
+@@ -72,6 +72,6 @@ struct BerryTree
+     u8 watered2:1;
+     u8 watered3:1;
+     u8 watered4:1;
+-};
++} ALIGNED(4);
+ 
+ #endif // GUARD_GLOBAL_BERRY_H
+diff --git a/include/gpu_regs.h b/include/gpu_regs.h
+index 3930f68..b7ed768 100644
+--- a/include/gpu_regs.h
++++ b/include/gpu_regs.h
+@@ -10,7 +10,13 @@
+ // Exported ROM declarations
+ void InitGpuRegManager(void);
+ void CopyBufferedValuesToGpuRegs(void);
++#ifdef PLATFORM_3DS
++// A window's horizontal edges can pass 255 on the 400-pixel screen: WIN_RANGE
++// (gba/io_reg.h) carries the rest above bit 15, and SetGpuReg keeps it.
++void SetGpuReg(u8 regOffset, u32 value);
++#else
+ void SetGpuReg(u8 regOffset, u16 value);
++#endif
+ void SetGpuReg_ForcedBlank(u8 regOffset, u16 value);
+ u16 GetGpuReg(u8 regOffset);
+ void SetGpuRegBits(u8 regOffset, u16 mask);
+diff --git a/include/palette.h b/include/palette.h
+index 3bde46c..293567e 100644
+--- a/include/palette.h
++++ b/include/palette.h
+@@ -26,6 +26,39 @@
+ #define OBJ_PLTT_ID(n) (OBJ_PLTT_OFFSET + PLTT_ID(n))
+ #define OBJ_PLTT_ID2(n) (PLTT_ID((n) + 16))
+ 
++#ifdef PLATFORM_3DS
++/*
++ * Port: OBJ palettes past the GBA's sixteen, for the field's sprites that
++ * need one of their own (a follower, the visible wild mons), where object
++ * events hold OBJ palettes 0-11. They sit after the GBA's 512 colours in both
++ * buffers, so PLTT_EXT_ID(n) is an ordinary palette buffer offset; only the
++ * 3DS renderers show them (TransferPlttBuffer hands them over with PLTT).
++ *
++ * They take every fade, blend and weather colour map an NPC's palette takes:
++ * a selection mask selects them all when it selects OBJ palette
++ * PLTT_EXT_MODEL (PALSLOT_NPC_1), and the weather treats them as that
++ * palette. One is in use while its bit of gPlttExtInUse is set (sprite.c,
++ * LoadSpritePaletteExt); with none in use nothing here costs a thing.
++ */
++#define PLTT_EXT_COUNT 16
++#define PLTT_EXT_OFFSET PLTT_BUFFER_SIZE
++#define PLTT_EXT_ID(n) (PLTT_EXT_OFFSET + PLTT_ID(n))
++#define PLTT_EXT_SIZE PLTT_SIZEOF(PLTT_ID(PLTT_EXT_COUNT))
++#define PLTT_EXT_MODEL 2
++#define PLTT_EXT_SELECTED(selectedPalettes) ((((selectedPalettes) >> (16 + PLTT_EXT_MODEL)) & 1) ? gPlttExtInUse : 0)
++#define PLTT_BUFFER_ALLOC (PLTT_BUFFER_SIZE + PLTT_ID(PLTT_EXT_COUNT))
++// The bytes of the buffers that a copy or fill of all palettes covers.
++#define PLTT_BUFFER_BYTES (PLTT_SIZE + (gPlttExtInUse ? PLTT_EXT_SIZE : 0))
++extern u16 gPlttExtInUse;
++#else
++#define PLTT_BUFFER_ALLOC PLTT_BUFFER_SIZE
++#define PLTT_BUFFER_BYTES PLTT_SIZE
++#endif
++// The bytes of a copy of the buffers kept to be put back later (in
++// gPaletteDecompressionBuffer, which holds them): every ext palette, in use or
++// not, so that one loaded or freed meanwhile does not change what goes back.
++#define PLTT_BUFFER_ALLOC_BYTES PLTT_SIZEOF(PLTT_BUFFER_ALLOC)
++
+ enum
+ {
+     FAST_FADE_IN_FROM_WHITE,
+@@ -61,7 +94,14 @@ extern u16 gPlttBufferUnfaded[PLTT_BUFFER_SIZE];
+ extern u16 gPlttBufferFaded[PLTT_BUFFER_SIZE];
+ 
+ void LoadCompressedPalette(const u32 *src, u16 offset, u16 size);
++// Port: a 2-byte load from an exact asset base means sizeof an INCBIN_U16 stub.
++// Use LoadPaletteWithOffset for explicit one-color reads from asset bases.
+ void LoadPalette(const void *src, u16 offset, u16 size);
++// byteOffset and size are in bytes; dest is an index into the palette buffers.
++// size is always an explicit copy length, including when byteOffset is zero.
++void LoadPaletteWithOffset(const void *base, u32 byteOffset, u16 dest, u16 size);
++// For palette animations that must leave the unfaded reference unchanged.
++void LoadPaletteFadedWithOffset(const void *base, u32 byteOffset, u16 dest, u16 size);
+ void FillPalette(u16 value, u16 offset, u16 size);
+ void TransferPlttBuffer(void);
+ u8 UpdatePaletteFade(void);
+@@ -93,7 +133,7 @@ static inline void SetBackdropFromColor(u16 color)
+ 
+ static inline void SetBackdropFromPalette(const u16 *palette)
+ {
+-  LoadPalette(palette, 0, PLTT_SIZEOF(1));
++  LoadPaletteWithOffset(palette, 0, 0, PLTT_SIZEOF(1));
+ }
+ 
+ #endif // GUARD_PALETTE_H
+diff --git a/include/party_menu.h b/include/party_menu.h
+index 9737991..ebf135c 100644
+--- a/include/party_menu.h
++++ b/include/party_menu.h
+@@ -83,4 +83,11 @@ void ShowPartyMenuToShowcaseMultiBattleParty(void);
+ void ChooseMonForDaycare(void);
+ void ChoosePartyMonByMenuType(u8 menuType);
+ 
++#ifdef PORT_BRIDGE
++void CtrParty_Fly(u8 slot, u16 mapSecId, u8 posWithinMapSec);
++#endif
++#ifdef PLATFORM_3DS
++void CtrBottom_OpenFlyMap(u8 slot, bool8 fromBag);
++#endif
++
+ #endif // GUARD_PARTY_MENU_H
+diff --git a/include/sprite.h b/include/sprite.h
+index 6a1b272..7ce4d5e 100644
+--- a/include/sprite.h
++++ b/include/sprite.h
+@@ -28,10 +28,21 @@ struct SpriteFrameImage
+ {
+     const void *data;
+     u16 size;
++#ifdef PORT_BRIDGE
++    // data is the exact asset base (or a RAM pointer), never a stub + offset.
++    u32 offset;
++#endif
+ };
+ 
++#ifdef PORT_BRIDGE
++#define obj_frame_tiles(ptr) {.data = (u8 *)ptr, .size = sizeof ptr, .offset = 0}
++#define sprite_frame(ptr, frameSize, frame) {.data = (const u8 *)(ptr), .size = (frameSize), .offset = (frameSize) * (frame)}
++#else
+ #define obj_frame_tiles(ptr) {.data = (u8 *)ptr, .size = sizeof ptr}
+-#define overworld_frame(ptr, width, height, frame) {.data = (u8 *)ptr + (width * height * frame * 64)/2, .size = (width * height * 64)/2}
++#define sprite_frame(ptr, frameSize, frame) {.data = (const u8 *)(ptr) + (frameSize) * (frame), .size = (frameSize)}
++#endif
++
++#define overworld_frame(ptr, width, height, frame) sprite_frame(ptr, ((width) * (height) * 64) / 2, frame)
+ 
+ struct SpritePalette
+ {
+@@ -309,6 +320,23 @@ u8 AllocSpritePalette(u16 tag);
+ u8 IndexOfSpritePaletteTag(u16 tag);
+ u16 GetSpritePaletteTagByPaletteNum(u8 paletteNum);
+ void FreeSpritePaletteByTag(u16 tag);
++#ifdef PLATFORM_3DS
++/*
++ * Port: sprite palettes in the ext palettes (include/palette.h), by tag as the
++ * GBA's sixteen are, returning the ext palette or 0xFF. A sprite created with
++ * a template whose tag is only an ext palette's is drawn with that palette;
++ * any other sprite can be given one (0xFF: back to oam.paletteNum).
++ * FreeSpritePaletteByTag and FreeAllSpritePalettes free them as the others.
++ * Unlike LoadSpritePalette this leaves the weather alone: on the field, call
++ * UpdateSpritePaletteExtWithWeather after a load, as field effects call
++ * UpdateSpritePaletteWithWeather.
++ */
++u8 LoadSpritePaletteExt(const struct SpritePalette *palette);
++u8 AllocSpritePaletteExt(u16 tag);
++u8 IndexOfSpritePaletteExtTag(u16 tag);
++void SetSpriteExtPalette(struct Sprite *sprite, u8 extPalette);
++u8 GetSpriteExtPalette(const struct Sprite *sprite);
++#endif
+ void SetSubspriteTables(struct Sprite *sprite, const struct SubspriteTable *subspriteTables);
+ bool8 AddSpriteToOamBuffer(struct Sprite *object, u8 *oamIndex);
+ bool8 AddSubspritesToOamBuffer(struct Sprite *sprite, struct OamData *destOam, u8 *oamIndex);
+diff --git a/src/battle_anim.c b/src/battle_anim.c
+index 30f9a7a..236239e 100644
+--- a/src/battle_anim.c
++++ b/src/battle_anim.c
+@@ -56,6 +56,10 @@ static void Task_LoopAndPlaySE(u8 taskId);
+ static void Task_WaitAndPlaySE(u8 taskId);
+ static void Task_ClearMonBg(u8 taskId);
+ 
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
++
+ static void Cmd_loadspritegfx(void);
+ static void Cmd_unloadspritegfx(void);
+ static void Cmd_createsprite(void);
+@@ -221,6 +225,10 @@ void LaunchBattleAnimation(const u8 *const animsTable[], u16 tableId, bool8 isMo
+ 
+     sMonAnimTaskIdArray[0] = TASK_NONE;
+     sMonAnimTaskIdArray[1] = TASK_NONE;
++#ifdef PORT_BRIDGE
++    // The table itself is externalized, not just the scripts it points to.
++    animsTable = Port_ResolveEventPointer(animsTable);
++#endif
+     sBattleAnimScriptPtr = animsTable[tableId];
+     gAnimScriptActive = TRUE;
+     sAnimFramesToWait = 0;
+@@ -231,9 +239,14 @@ void LaunchBattleAnimation(const u8 *const animsTable[], u16 tableId, bool8 isMo
+ 
+     if (isMoveAnim)
+     {
+-        for (i = 0; gMovesWithQuietBGM[i] != 0xFFFF; i++)
++        const u16 *quietMoves = gMovesWithQuietBGM;
++
++#ifdef PORT_BRIDGE
++        quietMoves = Port_ResolveEventPointer(quietMoves);
++#endif
++        for (i = 0; quietMoves[i] != 0xFFFF; i++)
+         {
+-            if (tableId == gMovesWithQuietBGM[i])
++            if (tableId == quietMoves[i])
+             {
+                 m4aMPlayVolumeControl(&gMPlayInfo_BGM, TRACKS_ALL, 128);
+                 break;
+@@ -311,6 +324,11 @@ static void RunAnimScriptCommand(void)
+ {
+     do
+     {
++#ifdef PORT_BRIDGE
++        // Resolve entries, jumps/calls/returns and fall-through across cached
++        // labels at the interpreter boundary, for every animation opcode.
++        sBattleAnimScriptPtr = Port_ResolveScriptPointer(sBattleAnimScriptPtr);
++#endif
+         sScriptCmdTable[sBattleAnimScriptPtr[0]]();
+     } while (sAnimFramesToWait == 0 && gAnimScriptActive);
+ }
+diff --git a/src/battle_anim_effects_1.c b/src/battle_anim_effects_1.c
+index e70131f..03bd5a4 100644
+--- a/src/battle_anim_effects_1.c
++++ b/src/battle_anim_effects_1.c
+@@ -2378,7 +2378,12 @@ static void AnimHyperBeamOrb(struct Sprite* sprite)
+     u16 speed;
+     u16 animNum = Random();
+ 
++    // BUG: gSolarBeamBigOrbAnimTable has 7 anims, so animNum 7 reads past its end
++#ifdef UBFIX
++    StartSpriteAnim(sprite, animNum % ARRAY_COUNT(gSolarBeamBigOrbAnimTable));
++#else
+     StartSpriteAnim(sprite, animNum % 8);
++#endif
+     sprite->x = GetBattlerSpriteCoord(gBattleAnimAttacker, BATTLER_COORD_X_2);
+     sprite->y = GetBattlerSpriteCoord(gBattleAnimAttacker, BATTLER_COORD_Y_PIC_OFFSET);
+     if (GetBattlerSide(gBattleAnimAttacker) != B_SIDE_PLAYER)
+diff --git a/src/battle_anim_effects_3.c b/src/battle_anim_effects_3.c
+index 0d79770..9f77a48 100644
+--- a/src/battle_anim_effects_3.c
++++ b/src/battle_anim_effects_3.c
+@@ -2744,11 +2744,17 @@ static void AnimSweetScentPetal(struct Sprite *sprite)
+     {
+         sprite->x = 0;
+         sprite->y = gBattleAnimArgs[0];
++#ifdef PLATFORM_3DS
++        sprite->y += CtrBattleSideShiftOf(B_SIDE_OPPONENT);
++#endif
+     }
+     else
+     {
+         sprite->x = DISPLAY_WIDTH;
+         sprite->y = gBattleAnimArgs[0] - 30;
++#ifdef PLATFORM_3DS
++        sprite->y += CtrBattleSideShiftOf(B_SIDE_PLAYER);
++#endif
+     }
+ 
+     sprite->data[2] = gBattleAnimArgs[2];
+diff --git a/src/battle_anim_mons.c b/src/battle_anim_mons.c
+index 87e71d0..a4f57ed 100644
+--- a/src/battle_anim_mons.c
++++ b/src/battle_anim_mons.c
+@@ -8,6 +8,9 @@
+ #include "trig.h"
+ #include "util.h"
+ #include "constants/battle_anim.h"
++#ifdef PLATFORM_3DS
++#include "ctr_battle_layout.h"
++#endif
+ 
+ #define IS_DOUBLE_BATTLE() (gBattleTypeFlags & BATTLE_TYPE_DOUBLE)
+ 
+@@ -249,8 +252,17 @@ static u8 GetBattlerSpriteFinal_Y(u8 battlerId, u16 species, bool8 a3)
+     {
+         if (GetBattlerSide(battlerId) == B_SIDE_PLAYER)
+             y += 8;
++#ifdef PLATFORM_3DS
++        // The player's side is lower: so is the floor the clamp keeps it on.
++        if (GetBattlerSide(battler) == B_SIDE_PLAYER
++         && y > DISPLAY_HEIGHT - MON_PIC_HEIGHT + 8 + CtrBattleSideShift(battler))
++            y = DISPLAY_HEIGHT - MON_PIC_HEIGHT + 8 + CtrBattleSideShift(battler);
++        else if (GetBattlerSide(battler) != B_SIDE_PLAYER && y > DISPLAY_HEIGHT - MON_PIC_HEIGHT + 8)
++            y = DISPLAY_HEIGHT - MON_PIC_HEIGHT + 8;
++#else
+         if (y > DISPLAY_HEIGHT - MON_PIC_HEIGHT + 8)
+             y = DISPLAY_HEIGHT - MON_PIC_HEIGHT + 8;
++#endif
+     }
+     return y;
+ }
+@@ -382,6 +394,7 @@ void StoreSpriteCallbackInData6(struct Sprite *sprite, SpriteCallback callback)
+ 
+ static void SetCallbackToStoredInData6(struct Sprite *sprite)
+ {
++#ifndef PORTABLE
+     u32 callback = (u16)sprite->data[6] | (sprite->data[7] << 16);
+     
+     sprite->callback = (SpriteCallback)callback;
+diff --git a/src/battle_anim_normal.c b/src/battle_anim_normal.c
+index a76ad1f..4d0b7fd 100644
+--- a/src/battle_anim_normal.c
++++ b/src/battle_anim_normal.c
+@@ -794,6 +794,9 @@ static void AnimShakeMonOrBattleTerrain(struct Sprite *sprite)
+         break;
+     }
+     sprite->data[4] = *(u16 *)(sprite->data[6] | (sprite->data[7] << 16));
++#else
++    sprite->data[4] = *(u16 *)LoadPointerFromVars(sprite->data[6], sprite->data[7]);
++#endif
+     sprite->data[5] = gBattleAnimArgs[3];
+     var0 = sprite->data[5] - 2;
+     if (var0 < 2)
+@@ -816,13 +819,21 @@ static void AnimShakeMonOrBattleTerrain_Step(struct Sprite *sprite)
+         else
+         {
+             sprite->data[1] = sprite->data[2];
++#ifndef PORTABLE
+             *(u16 *)(sprite->data[6] | (sprite->data[7] << 16)) += sprite->data[0];
++#else
++            *(u16 *)LoadPointerFromVars(sprite->data[6], sprite->data[7]) += sprite->data[0];
++#endif
+             sprite->data[0] = -sprite->data[0];
+         }
+     }
+     else
+     {
++#ifndef PORTABLE
+         *(u16 *)(sprite->data[6] | (sprite->data[7] << 16)) = sprite->data[4];
++#else
++        *(u16 *)LoadPointerFromVars(sprite->data[6], sprite->data[7]) = sprite->data[4];
++#endif
+         var0 = sprite->data[5] - 2;
+         if (var0 < 2)
+             for (i = 0; i < gBattlersCount; ++i)
+diff --git a/src/battle_anim_psychic.c b/src/battle_anim_psychic.c
+index 1a5683b..ac8b728 100644
+--- a/src/battle_anim_psychic.c
++++ b/src/battle_anim_psychic.c
+@@ -443,11 +443,17 @@ static void AnimDefensiveWall(struct Sprite *sprite)
+         {
+             sprite->x = 72;
+             sprite->y = 80;
++#ifdef PLATFORM_3DS
++            sprite->y += CtrBattleSideShiftOf(B_SIDE_PLAYER);
++#endif
+         }
+         else
+         {
+             sprite->x = 176;
+             sprite->y = 40;
++#ifdef PLATFORM_3DS
++            sprite->y += CtrBattleSideShiftOf(B_SIDE_OPPONENT);
++#endif
+         }
+     }
+     else
+@@ -549,11 +555,17 @@ static void AnimWallSparkle(struct Sprite *sprite)
+             {
+                 sprite->x = 72 - gBattleAnimArgs[0];
+                 sprite->y = gBattleAnimArgs[1] + 80;
++#ifdef PLATFORM_3DS
++                sprite->y += CtrBattleSideShiftOf(B_SIDE_PLAYER);
++#endif
+             }
+             else
+             {
+                 sprite->x = gBattleAnimArgs[0] + 176;
+                 sprite->y = gBattleAnimArgs[1] + 40;
++#ifdef PLATFORM_3DS
++                sprite->y += CtrBattleSideShiftOf(B_SIDE_OPPONENT);
++#endif
+             }
+         }
+         else
+diff --git a/src/battle_bg.c b/src/battle_bg.c
+index 3bcc500..79a1702 100644
+--- a/src/battle_bg.c
++++ b/src/battle_bg.c
+@@ -709,6 +709,23 @@ void LoadBattleMenuWindowGfx(void)
+     }
+ }
+ 
++#ifdef PLATFORM_3DS
++// The 3DS can draw the overworld in 3D in place of the battle's scenery on
++// BG3. A move's background is loaded into the same BG3 (LoadMoveBg) and has to
++// be shown instead, so the renderer asks which of the two BG3 holds.
++static bool8 sCtrMoveBgShown;
++
++bool8 CtrBattleBg_MoveBgShown(void)
++{
++    return sCtrMoveBgShown;
++}
++
++void CtrBattleBg_SetMoveBgShown(bool8 shown)
++{
++    sCtrMoveBgShown = shown;
++}
++#endif
++
+ void DrawMainBattleBackground(void)
+ {
+     LoadBattleTerrainGfx(GetBattleTerrainOverride());
+diff --git a/src/battle_controller_link_partner.c b/src/battle_controller_link_partner.c
+index d2c02a0..1a12df1 100644
+--- a/src/battle_controller_link_partner.c
++++ b/src/battle_controller_link_partner.c
+@@ -1108,7 +1108,7 @@ static void LinkPartnerHandleDrawTrainerPic(void)
+ 
+     DecompressTrainerBackPalette(trainerPicId, gActiveBattler);
+     SetMultiuseSpriteTemplateToTrainerBack(trainerPicId, GetBattlerPosition(gActiveBattler));
+-    gBattlerSpriteIds[gActiveBattler] = CreateSprite(&gMultiuseSpriteTemplate, xPos, (8 - gTrainerBackPicCoords[trainerPicId].size) * 4 + 80, GetBattlerSpriteSubpriority(gActiveBattler));
++    gBattlerSpriteIds[gActiveBattler] = CreateSprite(&gMultiuseSpriteTemplate, xPos, (8 - gTrainerBackPicCoords[trainerPicId].size) * 4 + 80 + BATTLE_SIDE_SHIFT(B_SIDE_PLAYER), GetBattlerSpriteSubpriority(gActiveBattler));
+ 
+     gSprites[gBattlerSpriteIds[gActiveBattler]].oam.paletteNum = gActiveBattler;
+     gSprites[gBattlerSpriteIds[gActiveBattler]].x2 = DISPLAY_WIDTH;
+diff --git a/src/battle_controller_safari.c b/src/battle_controller_safari.c
+index 4337dd7..3c6103a 100644
+--- a/src/battle_controller_safari.c
++++ b/src/battle_controller_safari.c
+@@ -161,6 +161,10 @@ static void SafariBufferRunCommand(void)
+ 
+ static void HandleInputChooseAction(void)
+ {
++#ifdef PLATFORM_3DS
++    if (CtrBattleMenu_Active())
++        CtrBattleMenu_ActionInput(&gActionSelectionCursor[gActiveBattler], TRUE);
++#endif
+     if (JOY_NEW(A_BUTTON))
+     {
+         PlaySE(SE_SELECT);
+diff --git a/src/battle_controllers.c b/src/battle_controllers.c
+index a2662c3..68c26cd 100644
+--- a/src/battle_controllers.c
++++ b/src/battle_controllers.c
+@@ -1020,8 +1020,14 @@ void BtlController_EmitChosenMonReturnValue(u8 bufferId, u8 partyId, u8 *battleP
+ 
+     sBattleBuffersTransferData[0] = CONTROLLER_CHOSENMONRETURNVALUE;
+     sBattleBuffersTransferData[1] = partyId;
++#ifdef UBFIX
++    if (battlePartyOrder != NULL)
++#endif
++    {
+     for (i = 0; i < (int)ARRAY_COUNT(gBattlePartyCurrentOrder); i++)
+         sBattleBuffersTransferData[2 + i] = battlePartyOrder[i];
++    }
++
+     PrepareBufferDataTransfer(bufferId, sBattleBuffersTransferData, 5);
+ }
+ 
+diff --git a/src/battle_interface.c b/src/battle_interface.c
+index 36fc9a5..f561493 100644
+--- a/src/battle_interface.c
++++ b/src/battle_interface.c
+@@ -10,6 +10,12 @@
+ #include "pokemon_summary_screen.h"
+ #include "safari_zone.h"
+ #include "constants/songs.h"
++#ifdef PLATFORM_3DS
++#include "3ds_battle_hud.h"
++#endif
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #undef abs
+ #define abs(a) ((a) < 0 ? -(a) : (a))
+@@ -630,6 +636,7 @@ static const u8 *GetBattleInterfaceGfxPtr(u8 elementId)
+ {
+     return gBattleInterface_Gfx[elementId];
+ }
++#endif
+ 
+ // Syncs the position of healthbar accordingly with the healthbox.
+ static void SpriteCB_HealthBar(struct Sprite *sprite)
+@@ -752,6 +759,9 @@ void InitBattlerHealthboxCoords(u8 battler)
+             break;
+         }
+     }
++    // The opponent's side sits higher on the 3DS (ctr_battle_layout.h).
++    if (GetBattlerSide(battler) != B_SIDE_PLAYER)
++        y += BATTLE_SIDE_SHIFT(B_SIDE_OPPONENT);
+ 
+     UpdateSpritePos(gHealthboxSpriteIds[battler], x, y);
+ }
+@@ -1086,6 +1096,7 @@ u8 CreatePartyStatusSummarySprites(u8 battlerId, struct HpAndStatus *partyInfo,
+     u8 summaryBarSpriteId;
+     u8 ballIconSpritesIds[PARTY_SIZE];
+     u8 taskId;
++    struct SpriteSheet statusSummaryBallsSpriteSheet;
+ 
+     if (!isSwitchingMons || GetBattlerPosition(battlerId) != B_POSITION_OPPONENT_RIGHT)
+     {
+@@ -1116,6 +1127,9 @@ u8 CreatePartyStatusSummarySprites(u8 battlerId, struct HpAndStatus *partyInfo,
+         x2 = -100;
+         speed = 5;
+     }
++    // The opponent's side sits higher on the 3DS (ctr_battle_layout.h).
++    if (isOpponent)
++        bar_Y += BATTLE_SIDE_SHIFT(B_SIDE_OPPONENT);
+ 
+     for (i = 0, nValidMons = 0; i < PARTY_SIZE; i++)
+     {
+@@ -1502,6 +1516,9 @@ void UpdateNickInHealthbox(u8 healthboxSpriteId, struct Pokemon *mon)
+ 
+     if ((species == SPECIES_NIDORAN_F || species == SPECIES_NIDORAN_M) && StringCompare(nickname, gSpeciesNames[species]) == 0)
+         gender = 100;
++#ifdef PLATFORM_3DS
++    CtrBattleHud_SetName(healthboxSpriteId, nickname, gender);
++#endif
+ 
+     if (CheckBattleTypeGhost(mon, gSprites[healthboxSpriteId].sBattlerId))
+         gender = 100;
+@@ -1568,6 +1585,9 @@ void TryAddPokeballIconToHealthbox(u8 healthboxSpriteId, bool8 noStatus)
+ 
+     healthBarSpriteId = gSprites[healthboxSpriteId].sHealthBarSpriteId;
+ 
++#ifdef PLATFORM_3DS
++    CtrBattleHud_SetBall(healthboxSpriteId, noStatus);
++#endif
+     if (noStatus)
+         CpuCopy32(GetBattleInterfaceGfxPtr(B_INTERFACE_GFX_BALL_CAUGHT), (void *)(OBJ_VRAM0 + (gSprites[healthBarSpriteId].oam.tileNum + 8) * TILE_SIZE_4BPP), 1 * TILE_SIZE_4BPP);
+     else
+@@ -1620,26 +1640,41 @@ static void UpdateStatusIconInHealthbox(u8 healthboxSpriteId)
+     {
+         statusGfxPtr = GetBattleInterfaceGfxPtr(GetStatusIconForBattlerId(B_INTERFACE_GFX_STATUS_SLP_BATTLER0, battlerId));
+         statusPalId = PAL_STATUS_SLP;
++#ifdef PLATFORM_3DS
++        CtrBattleHud_SetStatus(healthboxSpriteId, CTR_HUD_STATUS_SLP);
++#endif
+     }
+     else if (status & STATUS1_PSN_ANY)
+     {
+         statusGfxPtr = GetBattleInterfaceGfxPtr(GetStatusIconForBattlerId(B_INTERFACE_GFX_STATUS_PSN_BATTLER0, battlerId));
+         statusPalId = PAL_STATUS_PSN;
++#ifdef PLATFORM_3DS
++        CtrBattleHud_SetStatus(healthboxSpriteId, CTR_HUD_STATUS_PSN);
++#endif
+     }
+     else if (status & STATUS1_BURN)
+     {
+         statusGfxPtr = GetBattleInterfaceGfxPtr(GetStatusIconForBattlerId(B_INTERFACE_GFX_STATUS_BRN_BATTLER0, battlerId));
+         statusPalId = PAL_STATUS_BRN;
++#ifdef PLATFORM_3DS
++        CtrBattleHud_SetStatus(healthboxSpriteId, CTR_HUD_STATUS_BRN);
++#endif
+     }
+     else if (status & STATUS1_FREEZE)
+     {
+         statusGfxPtr = GetBattleInterfaceGfxPtr(GetStatusIconForBattlerId(B_INTERFACE_GFX_STATUS_FRZ_BATTLER0, battlerId));
+         statusPalId = PAL_STATUS_FRZ;
++#ifdef PLATFORM_3DS
++        CtrBattleHud_SetStatus(healthboxSpriteId, CTR_HUD_STATUS_FRZ);
++#endif
+     }
+     else if (status & STATUS1_PARALYSIS)
+     {
+         statusGfxPtr = GetBattleInterfaceGfxPtr(GetStatusIconForBattlerId(B_INTERFACE_GFX_STATUS_PAR_BATTLER0, battlerId));
+         statusPalId = PAL_STATUS_PAR;
++#ifdef PLATFORM_3DS
++        CtrBattleHud_SetStatus(healthboxSpriteId, CTR_HUD_STATUS_PAR);
++#endif
+     }
+     else
+     {
+@@ -1761,6 +1796,9 @@ static void UpdateLeftNoOfBallsTextOnHealthbox(u8 healthboxSpriteId)
+ 
+     txtPtr = StringCopy(text, gText_HighlightRed_Left);
+     ConvertIntToDecimalStringN(txtPtr, gNumSafariBalls, STR_CONV_MODE_LEFT_ALIGN, 2);
++#ifdef PLATFORM_3DS
++    CtrBattleHud_SetSafariBalls(healthboxSpriteId, gNumSafariBalls);
++#endif
+ 
+     windowTileData = AddTextPrinterAndCreateWindowOnHealthbox(text, 47 - GetStringWidth(FONT_SMALL, text, 0), 3, &windowId);
+     spriteTileNum = gSprites[healthboxSpriteId].oam.tileNum * TILE_SIZE_4BPP;
+diff --git a/src/battle_message.c b/src/battle_message.c
+index a6392be..5013afa 100644
+--- a/src/battle_message.c
++++ b/src/battle_message.c
+@@ -20,6 +20,9 @@
+ #include "constants/items.h"
+ #include "constants/trainers.h"
+ #include "constants/weather.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ struct BattleWindowText
+ {
+@@ -2810,7 +2813,12 @@ bool8 BattleStringShouldBeColored(u16 stringId)
+ void SetPpNumbersPaletteInMoveSelection(void)
+ {
+     struct ChooseMoveStruct *chooseMoveStruct = (struct ChooseMoveStruct *)(&gBattleBufferA[gActiveBattler][4]);
++#ifdef PORT_BRIDGE
++    // gPPTextPalette is an INCBIN stub here; indexed directly it read past the stub.
++    const u16 *palPtr = Port_ResolveAssetPointerSized(gPPTextPalette, PLTT_SIZE_4BPP);
++#else
+     const u16 *palPtr = gPPTextPalette;
++#endif
+     u8 var = GetCurrentPpToMaxPpState(chooseMoveStruct->currentPp[gMoveSelectionCursor[gActiveBattler]],
+                                       chooseMoveStruct->maxPp[gMoveSelectionCursor[gActiveBattler]]);
+ 
+diff --git a/src/battle_script_commands.c b/src/battle_script_commands.c
+index 67f90a3..dad6f61 100644
+--- a/src/battle_script_commands.c
++++ b/src/battle_script_commands.c
+@@ -3846,6 +3846,11 @@ static void Cmd_endselectionscript(void)
+     *(gBattlerAttacker + gBattleStruct->selectionScriptFinished) = TRUE;
+ }
+ 
++#ifdef PORTABLE
++#define SAFE_BtlController_EmitBattleAnimation(bufferId, animationId) BtlController_EmitBattleAnimation(bufferId, animationId, argumentPtr != NULL ? *argumentPtr : 0)
++#else
++#define SAFE_BtlController_EmitBattleAnimation(bufferId, animationId) BtlController_EmitBattleAnimation(bufferId, animationId, *argumentPtr)
++#endif
+ static void Cmd_playanimation(void)
+ {
+     const u16 *argumentPtr;
+@@ -3897,10 +3902,16 @@ static void Cmd_playanimation_var(void)
+     gActiveBattler = GetBattlerForBattleScript(gBattlescriptCurrInstr[1]);
+     animationIdPtr = T2_READ_PTR(gBattlescriptCurrInstr + 2);
+     argumentPtr = T2_READ_PTR(gBattlescriptCurrInstr + 6);
+-
++#ifdef PORTABLE
++    if (animationIdPtr != NULL && (
++       *animationIdPtr == B_ANIM_STATS_CHANGE
++    || *animationIdPtr == B_ANIM_SNATCH_MOVE
++    || *animationIdPtr == B_ANIM_SUBSTITUTE_FADE))
++#else
+     if (*animationIdPtr == B_ANIM_STATS_CHANGE
+      || *animationIdPtr == B_ANIM_SNATCH_MOVE
+      || *animationIdPtr == B_ANIM_SUBSTITUTE_FADE)
++#endif
+     {
+         BtlController_EmitBattleAnimation(BUFFER_A, *animationIdPtr, *argumentPtr);
+         MarkBattlerForControllerExec(gActiveBattler);
+@@ -3910,10 +3921,18 @@ static void Cmd_playanimation_var(void)
+     {
+         gBattlescriptCurrInstr += 10;
+     }
++#ifdef PORTABLE
++    else if (animationIdPtr != NULL && (
++             *animationIdPtr == B_ANIM_RAIN_CONTINUES
++          || *animationIdPtr == B_ANIM_SUN_CONTINUES
++          || *animationIdPtr == B_ANIM_SANDSTORM_CONTINUES
++          || *animationIdPtr == B_ANIM_HAIL_CONTINUES))
++#else
+     else if (*animationIdPtr == B_ANIM_RAIN_CONTINUES
+           || *animationIdPtr == B_ANIM_SUN_CONTINUES
+           || *animationIdPtr == B_ANIM_SANDSTORM_CONTINUES
+           || *animationIdPtr == B_ANIM_HAIL_CONTINUES)
++#endif
+     {
+         BtlController_EmitBattleAnimation(BUFFER_A, *animationIdPtr, *argumentPtr);
+         MarkBattlerForControllerExec(gActiveBattler);
+@@ -3930,6 +3949,7 @@ static void Cmd_playanimation_var(void)
+         gBattlescriptCurrInstr += 10;
+     }
+ }
++#undef SAFE_BtlController_EmitBattleAnimation
+ 
+ static void Cmd_setgraphicalstatchangevalues(void)
+ {
+@@ -9584,8 +9604,10 @@ static void Cmd_handleballthrow(void)
+         {
+             u8 shakes;
+ 
+-            odds = Sqrt(Sqrt(16711680 / odds));
+-            odds = 1048560 / odds;
++            // We have to use SAFE_DIV here, otherwise using the Master Ball crashes the game
++            // The reason this happens is that in the odds calculation the 'ballMultiplier' is zero for the Master Ball
++            odds = Sqrt(Sqrt(SAFE_DIV(16711680, odds)));
++            odds = SAFE_DIV(1048560, odds);
+ 
+             for (shakes = 0; shakes < BALL_3_SHAKES_SUCCESS && Random() < odds; shakes++);
+ 
+diff --git a/src/battle_setup.c b/src/battle_setup.c
+index 6d62084..b51ac16 100644
+--- a/src/battle_setup.c
++++ b/src/battle_setup.c
+@@ -755,7 +755,16 @@ static void TrainerBattleLoadArgs(const struct TrainerBattleParameter *specs, co
+             data += 2;
+             break;
+         case TRAINER_PARAM_LOAD_VAL_32BIT:
++#ifdef PORT_BRIDGE
++            // These operands are text or script pointers, not native callbacks.
++            if (specs->varPtr == &sTrainerABattleScriptRetAddr
++                || specs->varPtr == &sTrainerBBattleScriptRetAddr)
++                SetPtr(specs->varPtr, Port_ResolveScriptPointer((const u8 *)TrainerBattleLoadArg32(data)));
++            else
++                SetPtr(specs->varPtr, Port_ResolveTextPointer((const u8 *)TrainerBattleLoadArg32(data)));
++#else
+             SetU32(specs->varPtr, TrainerBattleLoadArg32(data));
++#endif
+             data += 4;
+             break;
+         case TRAINER_PARAM_CLEAR_VAL_8BIT:
+@@ -1039,10 +1048,14 @@ void PlayTrainerEncounterMusic(void)
+ 
+ static const u8 *ReturnEmptyStringIfNull(const u8 *string)
+ {
++#ifdef PORT_BRIDGE
++    return Port_ResolveTextPointer(string == NULL ? gText_EmptyString2 : string);
++#else
+     if (string == NULL)
+         return gString_Dummy;
+     else
+         return string;
++#endif
+ }
+ 
+ static const u8 *GetIntroSpeechOfApproachingTrainer(void)
+diff --git a/src/battle_transition.c b/src/battle_transition.c
+index 8a23dfe..5a6ac76 100644
+--- a/src/battle_transition.c
++++ b/src/battle_transition.c
+@@ -655,7 +655,7 @@ static void Task_BattleTransition(u8 taskId)
+ static bool8 Transition_StartIntro(struct Task *task)
+ {
+     SetWeatherScreenFadeOut();
+-    CpuCopy32(gPlttBufferFaded, gPlttBufferUnfaded, PLTT_SIZE);
++    CpuCopy32(gPlttBufferFaded, gPlttBufferUnfaded, PLTT_BUFFER_BYTES);
+     if (sTasks_Intro[task->tTransitionId] != NULL)
+     {
+         CreateTask(sTasks_Intro[task->tTransitionId], 4);
+@@ -693,7 +693,12 @@ static bool8 Transition_WaitForMain(struct Task *task)
+ {
+     task->tTransitionDone = FALSE;
+     if (FindTaskIdByFunc(sTasks_Main[task->tTransitionId]) == TASK_NONE)
++    {
+         task->tTransitionDone = TRUE;
++#ifdef PORTABLE
++        SetVBlankCallback(NULL); // Fixes use-after-free of sTransitionData in callbacks
++#endif
++    }
+     return FALSE;
+ }
+ 
+diff --git a/src/bg.c b/src/bg.c
+index aa11ae0..6648172 100644
+--- a/src/bg.c
++++ b/src/bg.c
+@@ -2,6 +2,14 @@
+ #include "global.h"
+ #include "bg.h"
+ #include "dma3.h"
++
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
++#ifdef PLATFORM_3DS
++#include "3ds_video.h"
++#endif
++
+ #include "gpu_regs.h"
+ 
+ #define DISPCNT_ALL_BG_AND_MODE_BITS    (DISPCNT_BG_ALL_ON | 0x7)
+@@ -193,6 +201,11 @@ u8 LoadBgVram(u8 bg, const void *src, u16 size, u16 destOffset, u8 mode)
+        return -1;
+     }
+ 
++#ifdef PLATFORM_3DS
++        // The banks of the field's cells go with its tilemap (3ds_tile_banks.h),
++        // once the copy is on its way: a full queue leaves VRAM as it was.
++        CtrVideo_TilemapRequested(offset, src, size);
++#endif
+ end:
+     return cursor;
+ }
+@@ -494,6 +507,19 @@ bool8 IsDma3ManagerBusyWithBgCopy(void)
+ {
+     int i;
+ 
++#ifdef PORT_BRIDGE
++    static u16 sDbgWaitCalls;
++    static u16 sDbgBusyCalls;
++#endif
++
++#ifdef PORTABLE
++    if ((sDbgWaitCalls++ & 0x1F) == 0)
++        Port_SetDmaDebug(0x0010, sDbgWaitCalls, 0, 0);
++    /* This is a DMA completion poll, not the authoritative frame pacer.
++     * Waiting here consumed the one-shot VBlank token and let the main loop
++     * execute twice on the following display frame. */
++    ProcessDma3Requests();
++#endif
+     for (i = 0; i < 0x80; i++)
+     {
+         u8 div = i / 0x20;
+@@ -504,6 +530,10 @@ bool8 IsDma3ManagerBusyWithBgCopy(void)
+             s8 reqSpace = WaitDma3Request(i);
+             if (reqSpace == -1)
+                 return TRUE;
++#ifdef PORT_BRIDGE
++                if ((sDbgBusyCalls++ & 0x1F) == 0)
++                    Port_SetDmaDebug(0x0011, i, div, mod);
++#endif
+             sDmaBusyBitfield[div] &= ~(1 << mod);
+         }
+     }
+@@ -833,6 +863,10 @@ void CopyToBgTilemapBuffer(u8 bg, const void *src, u16 mode, u16 destOffset)
+ {
+     if (IsInvalidBg32(bg) == FALSE && IsTileMapOutsideWram(bg) == FALSE)
+     {
++#ifdef PORT_BRIDGE
++        if (mode != 0)
++            src = Port_ResolveAssetPointerSized(src, mode);
++#endif
+         if (mode != 0)
+         {
+             CpuCopy16(src, (void *)(sGpuBgConfigs2[bg].tilemap + (destOffset * 32)), mode);
+@@ -874,6 +908,9 @@ void CopyToBgTilemapBufferRect(u8 bg, const void *src, u8 destX, u8 destY, u8 wi
+ 
+     if (IsInvalidBg32(bg) == FALSE && IsTileMapOutsideWram(bg) == FALSE)
+     {
++#ifdef PORT_BRIDGE
++        src = Port_ResolveAssetPointerSized(src, width * height * (GetBgType(bg) == BG_TYPE_AFFINE ? 1 : 2));
++#endif
+         switch (GetBgType(bg))
+         {
+             case 0:
+@@ -919,6 +956,9 @@ void CopyRectToBgTilemapBufferRect(u8 bg, const void *src, u8 srcX, u8 srcY, u8
+ 
+     if (!IsInvalidBg32(bg) && !IsTileMapOutsideWram(bg))
+     {
++#ifdef PORT_BRIDGE
++        src = Port_ResolveAssetPointerSized(src, srcWidth * srcHeight * (GetBgType(bg) == BG_TYPE_AFFINE ? 1 : 2));
++#endif
+         screenSize = GetBgControlAttribute(bg, BG_CTRL_ATTR_SCREENSIZE);
+         screenWidth = GetBgMetricTextMode(bg, 0x1) * 0x20;
+         screenHeight = GetBgMetricTextMode(bg, 0x2) * 0x20;
+diff --git a/src/blit.c b/src/blit.c
+index 969f899..524b125 100644
+--- a/src/blit.c
++++ b/src/blit.c
+@@ -1,5 +1,16 @@
+ #include "global.h"
+ #include "blit.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
++
++const u8 *ResolveBitmapSource(const u8 *base, u32 offset)
++{
++#ifdef PORT_BRIDGE
++    base = Port_ResolveAssetPointer(base);
++#endif
++    return base + offset;
++}
+ 
+ void BlitBitmapRect4BitWithoutColorKey(const struct Bitmap *src, struct Bitmap *dst, u16 srcX, u16 srcY, u16 dstX, u16 dstY, u16 width, u16 height)
+ {
+@@ -20,6 +31,12 @@ void BlitBitmapRect4Bit(const struct Bitmap *src, struct Bitmap *dst, u16 srcX,
+     s32 toAnd;
+     s32 toShift;
+ 
++#ifdef PORT_BRIDGE
++    struct Bitmap source = *src;
++    source.pixels = (u8 *)ResolveBitmapSource(source.pixels, 0);
++    src = &source;
++#endif
++
+     if (dst->width - dstX < width)
+         xEnd = (dst->width - dstX) + srcX;
+     else
+@@ -119,6 +136,12 @@ void BlitBitmapRect4BitTo8Bit(const struct Bitmap *src, struct Bitmap *dst, u16
+     u8 *pixelsDst;
+     s32 colorKeyBits;
+ 
++#ifdef PORT_BRIDGE
++    struct Bitmap source = *src;
++    source.pixels = (u8 *)ResolveBitmapSource(source.pixels, 0);
++    src = &source;
++#endif
++
+     palOffsetBits = (u32)(paletteOffset << 0x1C) >> 0x18;
+     colorKeyBits = (u32)(colorKey << 0x1C) >> 0x18;
+ 
+diff --git a/src/data.c b/src/data.c
+index 498f281..d463752 100644
+--- a/src/data.c
++++ b/src/data.c
+@@ -12,84 +12,84 @@
+ 
+ const struct SpriteFrameImage gBattlerPicTable_PlayerLeft[] =
+ {
+-    BATTLER_OFFSET(0), MON_PIC_SIZE,
+-    BATTLER_OFFSET(1), MON_PIC_SIZE,
+-    BATTLER_OFFSET(2), MON_PIC_SIZE,
+-    BATTLER_OFFSET(3), MON_PIC_SIZE,
++    {BATTLER_OFFSET(0), MON_PIC_SIZE},
++    {BATTLER_OFFSET(1), MON_PIC_SIZE},
++    {BATTLER_OFFSET(2), MON_PIC_SIZE},
++    {BATTLER_OFFSET(3), MON_PIC_SIZE},
+ };
+ 
+ const struct SpriteFrameImage gBattlerPicTable_OpponentLeft[] =
+ {
+-    BATTLER_OFFSET(4), MON_PIC_SIZE,
+-    BATTLER_OFFSET(5), MON_PIC_SIZE,
+-    BATTLER_OFFSET(6), MON_PIC_SIZE,
+-    BATTLER_OFFSET(7), MON_PIC_SIZE,
++    {BATTLER_OFFSET(4), MON_PIC_SIZE},
++    {BATTLER_OFFSET(5), MON_PIC_SIZE},
++    {BATTLER_OFFSET(6), MON_PIC_SIZE},
++    {BATTLER_OFFSET(7), MON_PIC_SIZE},
+ };
+ 
+ const struct SpriteFrameImage gBattlerPicTable_PlayerRight[] =
+ {
+-    BATTLER_OFFSET(8),  MON_PIC_SIZE,
+-    BATTLER_OFFSET(9),  MON_PIC_SIZE,
+-    BATTLER_OFFSET(10), MON_PIC_SIZE,
+-    BATTLER_OFFSET(11), MON_PIC_SIZE,
++    {BATTLER_OFFSET(8),  MON_PIC_SIZE},
++    {BATTLER_OFFSET(9),  MON_PIC_SIZE},
++    {BATTLER_OFFSET(10), MON_PIC_SIZE},
++    {BATTLER_OFFSET(11), MON_PIC_SIZE},
+ };
+ 
+ const struct SpriteFrameImage gBattlerPicTable_OpponentRight[] =
+ {
+-    BATTLER_OFFSET(12), MON_PIC_SIZE,
+-    BATTLER_OFFSET(13), MON_PIC_SIZE,
+-    BATTLER_OFFSET(14), MON_PIC_SIZE,
+-    BATTLER_OFFSET(15), MON_PIC_SIZE,
++    {BATTLER_OFFSET(12), MON_PIC_SIZE},
++    {BATTLER_OFFSET(13), MON_PIC_SIZE},
++    {BATTLER_OFFSET(14), MON_PIC_SIZE},
++    {BATTLER_OFFSET(15), MON_PIC_SIZE},
+ };
+ 
+ const struct SpriteFrameImage gTrainerBackPicTable_Red[] =
+ {
+-    gTrainerBackPic_Red, 0x0800,
+-    gTrainerBackPic_Red + 0x0800, 0x0800,
+-    gTrainerBackPic_Red + 0x1000, 0x0800,
+-    gTrainerBackPic_Red + 0x1800, 0x0800,
+-    gTrainerBackPic_Red + 0x2000, 0x0800,
++    sprite_frame(gTrainerBackPic_Red, 0x0800, 0),
++    sprite_frame(gTrainerBackPic_Red, 0x0800, 1),
++    sprite_frame(gTrainerBackPic_Red, 0x0800, 2),
++    sprite_frame(gTrainerBackPic_Red, 0x0800, 3),
++    sprite_frame(gTrainerBackPic_Red, 0x0800, 4),
+ };
+ 
+ const struct SpriteFrameImage gTrainerBackPicTable_Leaf[] =
+ {
+-    gTrainerBackPic_Leaf, 0x0800,
+-    gTrainerBackPic_Leaf + 0x0800, 0x0800,
+-    gTrainerBackPic_Leaf + 0x1000, 0x0800,
+-    gTrainerBackPic_Leaf + 0x1800, 0x0800,
+-    gTrainerBackPic_Leaf + 0x2000, 0x0800,
++    sprite_frame(gTrainerBackPic_Leaf, 0x0800, 0),
++    sprite_frame(gTrainerBackPic_Leaf, 0x0800, 1),
++    sprite_frame(gTrainerBackPic_Leaf, 0x0800, 2),
++    sprite_frame(gTrainerBackPic_Leaf, 0x0800, 3),
++    sprite_frame(gTrainerBackPic_Leaf, 0x0800, 4),
+ };
+ 
+ const struct SpriteFrameImage gTrainerBackPicTable_Pokedude[] =
+ {
+-    gTrainerBackPic_Pokedude, 0x0800,
+-    gTrainerBackPic_Pokedude + 0x0800, 0x0800,
+-    gTrainerBackPic_Pokedude + 0x1000, 0x0800,
+-    gTrainerBackPic_Pokedude + 0x1800, 0x0800,
++    sprite_frame(gTrainerBackPic_Pokedude, 0x0800, 0),
++    sprite_frame(gTrainerBackPic_Pokedude, 0x0800, 1),
++    sprite_frame(gTrainerBackPic_Pokedude, 0x0800, 2),
++    sprite_frame(gTrainerBackPic_Pokedude, 0x0800, 3),
+ };
+ 
+ const struct SpriteFrameImage gTrainerBackPicTable_OldMan[] =
+ {
+-    gTrainerBackPic_OldMan, 0x0800,
+-    gTrainerBackPic_OldMan + 0x0800, 0x0800,
+-    gTrainerBackPic_OldMan + 0x1000, 0x0800,
+-    gTrainerBackPic_OldMan + 0x1800, 0x0800,
++    sprite_frame(gTrainerBackPic_OldMan, 0x0800, 0),
++    sprite_frame(gTrainerBackPic_OldMan, 0x0800, 1),
++    sprite_frame(gTrainerBackPic_OldMan, 0x0800, 2),
++    sprite_frame(gTrainerBackPic_OldMan, 0x0800, 3),
+ };
+ 
+ const struct SpriteFrameImage gTrainerBackPicTable_RSBrendan[] =
+ {
+-    gTrainerBackPic_RSBrendan, 0x0800,
+-    gTrainerBackPic_RSBrendan + 0x0800, 0x0800,
+-    gTrainerBackPic_RSBrendan + 0x1000, 0x0800,
+-    gTrainerBackPic_RSBrendan + 0x1800, 0x0800,
++    sprite_frame(gTrainerBackPic_RSBrendan, 0x0800, 0),
++    sprite_frame(gTrainerBackPic_RSBrendan, 0x0800, 1),
++    sprite_frame(gTrainerBackPic_RSBrendan, 0x0800, 2),
++    sprite_frame(gTrainerBackPic_RSBrendan, 0x0800, 3),
+ };
+ 
+ const struct SpriteFrameImage gTrainerBackPicTable_RSMay[] =
+ {
+-    gTrainerBackPic_RSMay, 0x0800,
+-    gTrainerBackPic_RSMay + 0x0800, 0x0800,
+-    gTrainerBackPic_RSMay + 0x1000, 0x0800,
+-    gTrainerBackPic_RSMay + 0x1800, 0x0800,
++    sprite_frame(gTrainerBackPic_RSMay, 0x0800, 0),
++    sprite_frame(gTrainerBackPic_RSMay, 0x0800, 1),
++    sprite_frame(gTrainerBackPic_RSMay, 0x0800, 2),
++    sprite_frame(gTrainerBackPic_RSMay, 0x0800, 3),
+ };
+ 
+ static const union AnimCmd sAnim_GeneralFrame0[] =
+diff --git a/src/dma3_manager.c b/src/dma3_manager.c
+index a3a2374..413bed3 100644
+--- a/src/dma3_manager.c
++++ b/src/dma3_manager.c
+@@ -1,6 +1,10 @@
+ #include "global.h"
+ #include "dma3.h"
+ 
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
++
+ #define MAX_DMA_REQUESTS 128
+ 
+ static struct {
+@@ -33,7 +37,7 @@ void ClearDma3Requests(void)
+ 
+ void ProcessDma3Requests(void)
+ {
+-    u16 bytesTransferred;
++    u32 bytesTransferred;
+ 
+     if (gDma3ManagerLocked)
+         return;
+@@ -45,10 +49,13 @@ void ProcessDma3Requests(void)
+     {
+         bytesTransferred += gDma3Requests[gDma3RequestCursor].size;
+ 
++#ifndef PORT_BRIDGE
+         if (bytesTransferred > 40 * 1024)
+             return; // don't transfer more than 40 KiB
+         if (*(u8 *)REG_ADDR_VCOUNT > 224)
+             return; // we're about to leave vblank, stop
++#endif
++        // Port requests write the RAM shadow; hardware publication is separate.
+ 
+         switch (gDma3Requests[gDma3RequestCursor].mode)
+         {
+diff --git a/src/dodrio_berry_picking.c b/src/dodrio_berry_picking.c
+index a337147..dbfc0aa 100644
+--- a/src/dodrio_berry_picking.c
++++ b/src/dodrio_berry_picking.c
+@@ -720,7 +720,7 @@ static void (*const sMemberFuncs[])(void) =
+     [FUNC_WAIT_END_GAME]  = WaitEndGame_Member
+ };
+ 
+-void StartDodrioBerryPicking(u16 partyId, MainCallback exitCallback)
++void StartDodrioBerryPicking(u16 partyId, void (*exitCallback)(void))
+ {
+     sExitingGame = FALSE;
+ 
+diff --git a/src/event_object_lock.c b/src/event_object_lock.c
+index 316595a..ba6a427 100644
+--- a/src/event_object_lock.c
++++ b/src/event_object_lock.c
+@@ -5,6 +5,9 @@
+ #include "script_movement.h"
+ #include "event_data.h"
+ #include "constants/event_objects.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ bool8 walkrun_is_standing_still(void)
+ {
+diff --git a/src/event_object_movement.c b/src/event_object_movement.c
+index 8e82824..5c1c2f3 100644
+--- a/src/event_object_movement.c
++++ b/src/event_object_movement.c
+@@ -22,6 +22,9 @@
+ #include "constants/union_room.h"
+ 
+ static void MoveCoordsInDirection(u32, s16 *, s16 *, s16, s16);
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ static bool8 ObjectEventExecSingleMovementAction(struct ObjectEvent *, struct Sprite *);
+ static u8 GetCollisionInDirection(struct ObjectEvent *, u8);
+ static u32 GetCopyDirection(u8, u32, u32);
+@@ -29,6 +32,9 @@ static void TryEnableObjectEventAnim(struct ObjectEvent *, struct Sprite *);
+ static void ObjectEventExecHeldMovementAction(struct ObjectEvent *, struct Sprite *);
+ static void UpdateObjectEventSpriteAnimPause(struct ObjectEvent *, struct Sprite *);
+ static bool8 IsCoordOutsideObjectEventMovementRange(struct ObjectEvent *, s16, s16);
++#if defined(PLATFORM_3DS)
++#include "3ds_field_view.h"
++#endif
+ static bool8 IsMetatileDirectionallyImpassable(struct ObjectEvent *, s16, s16, u8);
+ static bool8 DoesObjectCollideWithObjectAt(struct ObjectEvent *, s16, s16);
+ static void CalcWhetherObjectIsOffscreen(struct ObjectEvent *, struct Sprite *);
+@@ -1529,7 +1535,7 @@ void RemoveObjectEventByLocalIdAndMap(u8 localId, u8 mapNum, u8 mapGroup)
+ 
+ static void RemoveObjectEventInternal(struct ObjectEvent *objectEvent)
+ {
+-    struct SpriteFrameImage image;
++    struct SpriteFrameImage image = {0};
+     image.size = GetObjectEventGraphicsInfo(objectEvent->graphicsId)->size;
+     gSprites[objectEvent->spriteId].images = &image;
+     DestroySprite(&gSprites[objectEvent->spriteId]);
+@@ -1600,7 +1606,7 @@ static u8 TrySpawnObjectEventTemplate(const struct ObjectEventTemplate *objectEv
+ {
+     u8 objectEventId;
+     struct SpriteTemplate spriteTemplate;
+-    struct SpriteFrameImage spriteFrameImage;
++    struct SpriteFrameImage spriteFrameImage = {0};
+     const struct ObjectEventGraphicsInfo *graphicsInfo;
+     const struct SubspriteTable *subspriteTables = NULL;
+ 
+@@ -1789,6 +1795,236 @@ u8 CreateFameCheckerObject(u8 graphicsId, u8 localId, s16 x, s16 y)
+     return spriteId;
+ }
+ 
++#if defined(PLATFORM_3DS)
++/*
++ * There is room for OBJECT_EVENTS_COUNT objects, a number the save keeps, and
++ * the 3DS top screen shows more of the map than that many cover: the window
++ * below is its view (3ds_field_view.h), which for the voxel camera reaches far
++ * up the map. When the people in it outnumber the room, the ones on screen and
++ * nearest the player come first, and a person further off - out of sight, or
++ * far up the view - gives its room to them. Spawned in template order with the
++ * first come keeping the room, people standing on screen were never created
++ * while others out of sight were, and came and went as the player walked.
++ */
++
++// The window, in metatiles from the player's: the view and a margin of two,
++// as the original keeps, for people to appear before they are on screen.
++#define OBJECT_EVENT_VIEW_MARGIN 2
++// How much further off a person has to be than one waiting for room to give
++// its room up: without a gap, two at about the same distance would trade
++// places step after step, both flickering in and out.
++#define OBJECT_EVENT_EVICT_GAP 4
++
++static void GetObjectEventWindow(s16 *left, s16 *right, s16 *top, s16 *bottom)
++{
++    s16 playerX = gSaveBlock1Ptr->pos.x + MAP_OFFSET;
++    s16 playerY = gSaveBlock1Ptr->pos.y + MAP_OFFSET;
++    int west, east, north, south;
++
++    CtrFieldView_Window(CtrFieldView_Current(), OBJECT_EVENT_VIEW_MARGIN, &west, &east, &north, &south);
++    *left = playerX - west;
++    *right = playerX + east;
++    *top = playerY - north;
++    *bottom = playerY + south;
++}
++
++// Smaller comes first: tiles out of sight count double, then the distance.
++static float ObjectEventViewScore(s16 x, s16 y)
++{
++    return CtrFieldView_Score(CtrFieldView_Current(),
++                              x - (gSaveBlock1Ptr->pos.x + MAP_OFFSET),
++                              y - (gSaveBlock1Ptr->pos.y + MAP_OFFSET));
++}
++
++static bool8 IsLinkPlayerObjectEvent(u8 objectEventId)
++{
++    u8 j;
++
++    for (j = 0; j < ARRAY_COUNT(gLinkPlayerObjectEvents); j++)
++    {
++        if (gLinkPlayerObjectEvents[j].active && objectEventId == gLinkPlayerObjectEvents[j].objEventId)
++            return TRUE;
++    }
++    return FALSE;
++}
++
++static u8 GetSpawnableObjectEventCount(void)
++{
++    if (CurrentBattlePyramidLocation() != PYRAMID_LOCATION_NONE)
++        return GetNumBattlePyramidObjectEvents();
++    else if (InTrainerHill())
++        return HILL_TRAINERS_PER_FLOOR;
++    else
++        return gMapHeader.events->objectEventCount;
++}
++
++static bool8 IsInObjectEventWindow(s16 x, s16 y, s16 left, s16 right, s16 top, s16 bottom)
++{
++    return x >= left && x <= right && y >= top && y <= bottom;
++}
++
++// Can this object give its room up? Not the player or a link partner, and not
++// one a script or a trainer's approach is moving or holding: anything else is
++// spawned again from its template once it comes back into view, as when it
++// leaves the window. An object spawned without one (a special object) can
++// only go once it is outside the window, where it would be removed anyway.
++static bool8 CanEvictObjectEvent(u8 objectEventId, s16 left, s16 right, s16 top, s16 bottom)
++{
++    struct ObjectEvent *objectEvent = &gObjectEvents[objectEventId];
++    u8 count;
++
++    if (!objectEvent->active || objectEvent->isPlayer || objectEvent->frozen
++     || objectEvent->heldMovementActive || IsLinkPlayerObjectEvent(objectEventId))
++        return FALSE;
++    if (!IsInObjectEventWindow(objectEvent->currentCoords.x, objectEvent->currentCoords.y, left, right, top, bottom)
++     && !IsInObjectEventWindow(objectEvent->initialCoords.x, objectEvent->initialCoords.y, left, right, top, bottom))
++        return TRUE;
++    if (objectEvent->mapNum != gSaveBlock1Ptr->location.mapNum
++     || objectEvent->mapGroup != gSaveBlock1Ptr->location.mapGroup)
++        return FALSE;
++    count = GetSpawnableObjectEventCount();
++    return FindObjectEventTemplateByLocalId(objectEvent->localId, gSaveBlock1Ptr->objectEventTemplates, count) != NULL;
++}
++
++static bool8 HasFreeObjectEventSlot(void)
++{
++    u8 i;
++
++    for (i = 0; i < OBJECT_EVENTS_COUNT; i++)
++    {
++        if (!gObjectEvents[i].active)
++            return TRUE;
++    }
++    return FALSE;
++}
++
++// Frees the room of the object furthest off, if it is further off than a
++// person scored `score` by more than the gap.
++static bool8 EvictFurthestObjectEvent(float score, s16 left, s16 right, s16 top, s16 bottom)
++{
++    u8 i, furthest = OBJECT_EVENTS_COUNT;
++    float furthestScore = score + OBJECT_EVENT_EVICT_GAP;
++
++    for (i = 0; i < OBJECT_EVENTS_COUNT; i++)
++    {
++        float objectScore;
++
++        if (!CanEvictObjectEvent(i, left, right, top, bottom))
++            continue;
++        objectScore = ObjectEventViewScore(gObjectEvents[i].currentCoords.x, gObjectEvents[i].currentCoords.y);
++        if (objectScore > furthestScore)
++        {
++            furthestScore = objectScore;
++            furthest = i;
++        }
++    }
++    if (furthest == OBJECT_EVENTS_COUNT)
++        return FALSE;
++    RemoveObjectEvent(&gObjectEvents[furthest]);
++    return TRUE;
++}
++
++void TrySpawnObjectEvents(s16 cameraX, s16 cameraY)
++{
++    u8 i, j, objectCount, waiting = 0;
++    u8 order[OBJECT_EVENT_TEMPLATES_COUNT];
++    float score[OBJECT_EVENT_TEMPLATES_COUNT];
++    s16 left, right, top, bottom;
++    u8 mapNum = gSaveBlock1Ptr->location.mapNum;
++    u8 mapGroup = gSaveBlock1Ptr->location.mapGroup;
++
++    if (gMapHeader.events == NULL)
++        return;
++
++    GetObjectEventWindow(&left, &right, &top, &bottom);
++    objectCount = GetSpawnableObjectEventCount();
++    if (objectCount > OBJECT_EVENT_TEMPLATES_COUNT)
++        objectCount = OBJECT_EVENT_TEMPLATES_COUNT;
++
++    // The people in the window not yet spawned, nearest the view first.
++    for (i = 0; i < objectCount; i++)
++    {
++        struct ObjectEventTemplate *template = &gSaveBlock1Ptr->objectEventTemplates[i];
++        s16 npcX = template->x + MAP_OFFSET;
++        s16 npcY = template->y + MAP_OFFSET;
++        float npcScore;
++
++        if (!IsInObjectEventWindow(npcX, npcY, left, right, top, bottom) || FlagGet(template->flagId)
++         || GetObjectEventIdByLocalIdAndMap(template->localId, mapNum, mapGroup) != OBJECT_EVENTS_COUNT)
++            continue;
++        npcScore = ObjectEventViewScore(npcX, npcY);
++        for (j = waiting; j > 0 && score[j - 1] > npcScore; j--)
++        {
++            order[j] = order[j - 1];
++            score[j] = score[j - 1];
++        }
++        order[j] = i;
++        score[j] = npcScore;
++        waiting++;
++    }
++
++    for (i = 0; i < waiting; i++)
++    {
++        // The rest are further off still: none of them would take a room.
++        if (!HasFreeObjectEventSlot() && !EvictFurthestObjectEvent(score[i], left, right, top, bottom))
++            break;
++        TrySpawnObjectEventTemplate(&gSaveBlock1Ptr->objectEventTemplates[order[i]], mapNum, mapGroup, cameraX, cameraY);
++    }
++}
++
++// Room for an object made at the player's side (the follower, follower_mon.c):
++// with every room taken, the person furthest off gives its room up, as it
++// would for a person standing there.
++bool8 FreeObjectEventSlotNearPlayer(void)
++{
++    s16 left, right, top, bottom;
++
++    if (HasFreeObjectEventSlot())
++        return TRUE;
++    GetObjectEventWindow(&left, &right, &top, &bottom);
++    return EvictFurthestObjectEvent(ObjectEventViewScore(gSaveBlock1Ptr->pos.x + MAP_OFFSET, gSaveBlock1Ptr->pos.y + MAP_OFFSET),
++                                    left, right, top, bottom);
++}
++
++void RemoveObjectEventsOutsideView(void)
++{
++    u8 i;
++
++    for (i = 0; i < OBJECT_EVENTS_COUNT; i++)
++    {
++        struct ObjectEvent *objectEvent = &gObjectEvents[i];
++
++        if (objectEvent->active && !objectEvent->isPlayer && !IsLinkPlayerObjectEvent(i))
++            RemoveObjectEventIfOutsideView(objectEvent);
++    }
++}
++
++static void RemoveObjectEventIfOutsideView(struct ObjectEvent *objectEvent)
++{
++    s16 left, right, top, bottom;
++
++    GetObjectEventWindow(&left, &right, &top, &bottom);
++    if (IsInObjectEventWindow(objectEvent->currentCoords.x, objectEvent->currentCoords.y, left, right, top, bottom)
++     || IsInObjectEventWindow(objectEvent->initialCoords.x, objectEvent->initialCoords.y, left, right, top, bottom))
++        return;
++    RemoveObjectEvent(objectEvent);
++}
++
++// The view changed under a still camera (the 2D/voxel option, the voxel
++// camera's pitch or zoom, the camera easing to or from a map's edge): the people it now reaches, or no longer does,
++// are brought in or let go as a step would (field_camera.c).
++void UpdateObjectEventsForViewChange(void)
++{
++    static unsigned sViewGeneration;
++    unsigned generation = CtrFieldView_Generation();
++
++    if (generation == sViewGeneration)
++        return;
++    sViewGeneration = generation;
++    RemoveObjectEventsOutsideView();
++    TrySpawnObjectEvents(0, 0);
++}
++#else
+ void TrySpawnObjectEvents(s16 cameraX, s16 cameraY)
+ {
+     u8 i;
+@@ -1796,10 +2032,10 @@ void TrySpawnObjectEvents(s16 cameraX, s16 cameraY)
+ 
+     if (gMapHeader.events != NULL)
+     {
+-        s16 left = gSaveBlock1Ptr->pos.x - 2;
+-        s16 right = gSaveBlock1Ptr->pos.x + MAP_OFFSET_W + 2;
+-        s16 top = gSaveBlock1Ptr->pos.y;
+-        s16 bottom = gSaveBlock1Ptr->pos.y + MAP_OFFSET_H + 2;
++        s16 left = gSaveBlock1Ptr->pos.x - OBJECT_EVENT_VIEW_LEFT;
++        s16 right = gSaveBlock1Ptr->pos.x + OBJECT_EVENT_VIEW_RIGHT;
++        s16 top = gSaveBlock1Ptr->pos.y - OBJECT_EVENT_VIEW_TOP;
++        s16 bottom = gSaveBlock1Ptr->pos.y + OBJECT_EVENT_VIEW_BOTTOM;
+ 
+         objectCount = gMapHeader.events->objectEventCount;
+ 
+@@ -1853,6 +2089,7 @@ static void RemoveObjectEventIfOutsideView(struct ObjectEvent *objectEvent)
+         return;
+     RemoveObjectEvent(objectEvent);
+ }
++#endif
+ 
+ void SpawnObjectEventsOnReturnToField(s16 x, s16 y)
+ {
+@@ -1873,7 +2110,7 @@ static void SpawnObjectEventOnReturnToField(u8 objectEventId, s16 x, s16 y)
+     struct Sprite *sprite;
+     struct ObjectEvent *objectEvent;
+     struct SpriteTemplate spriteTemplate;
+-    struct SpriteFrameImage spriteFrameImage;
++    struct SpriteFrameImage spriteFrameImage = {0};
+     const struct SubspriteTable *subspriteTables;
+     const struct ObjectEventGraphicsInfo *graphicsInfo;
+ 
+@@ -2349,8 +2586,14 @@ static bool8 ObjectEventDoesElevationMatch(struct ObjectEvent *objectEvent, u8 e
+ void UpdateObjectEventsForCameraUpdate(s16 x, s16 y)
+ {
+     UpdateObjectEventCoordsForCameraUpdate();
++#if defined(PLATFORM_3DS)
++    // Those the step leaves behind first: their room goes to those it brings.
++    RemoveObjectEventsOutsideView();
++    TrySpawnObjectEvents(x, y);
++#else
+     TrySpawnObjectEvents(x, y);
+     RemoveObjectEventsOutsideView();
++#endif
+ }
+ 
+ u8 AddCameraObject(u8 linkedSpriteId)
+@@ -5156,6 +5399,13 @@ u8 name(u32 idx)                                    \
+     return animIds[direction];                      \
+ }
+ 
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0424,
++                        objectEvent->localId,
++                        objectEvent->movementActionId,
++                        sprite->sActionFuncId,
++                        objectEvent->heldMovementFinished | (objectEvent->heldMovementActive << 8));
++#endif
+ dirn_to_anim(GetFaceDirectionMovementAction, sFaceDirectionMovementActions);
+ dirn_to_anim(GetFaceDirectionFastMovementAction, sFaceDirectionFastMovementActions);
+ 
+@@ -9204,9 +9454,11 @@ void UpdateObjectEventSpriteInvisibility(struct Sprite *sprite, bool8 invisible)
+     x2 = x - (sprite->centerToCornerVecX >> 1);
+     y2 = y - (sprite->centerToCornerVecY >> 1);
+ 
+-    if ((s16)x >= DISPLAY_WIDTH + 16 || x2 < -16)
++    if ((s16)x >= DISPLAY_WIDTH + FIELD_VIEW_OFFSET_X + 16
++     || x2 < -FIELD_VIEW_OFFSET_X - 16)
+         sprite->invisible = TRUE;
+-    if ((s16)y >= DISPLAY_HEIGHT + 16 || y2 < -16)
++    if ((s16)y >= DISPLAY_HEIGHT + FIELD_VIEW_OFFSET_Y + 16
++     || y2 < -FIELD_VIEW_OFFSET_Y - 16)
+         sprite->invisible = TRUE;
+ }
+ 
+@@ -9396,6 +9648,13 @@ void DoShadowFieldEffect(struct ObjectEvent *objectEvent)
+ {
+     if (!objectEvent->hasShadow)
+     {
++#ifdef PORT_BRIDGE
++        Port_SetBirchDebugEx(0x0425,
++                            objectEvent->localId,
++                            objectEvent->currentCoords.x,
++                            objectEvent->currentCoords.y,
++                            objectEvent->currentElevation | (objectEvent->previousElevation << 8));
++#endif
+         objectEvent->hasShadow = TRUE;
+         StartFieldEffectForObjectEvent(FLDEFF_SHADOW, objectEvent);
+     }
+diff --git a/src/field_camera.c b/src/field_camera.c
+index 88f94bf..4e0982f 100644
+--- a/src/field_camera.c
++++ b/src/field_camera.c
+@@ -136,69 +136,54 @@ static void RedrawMapSlicesForCameraUpdate(struct FieldCameraOffset *cameraOffse
+ 
+ static void RedrawMapSliceNorth(struct FieldCameraOffset *cameraOffset, const struct MapLayout *mapLayout)
+ {
+-    u8 i;
+-    u8 temp;
+-    u32 r7;
+-
+-    temp = cameraOffset->yTileOffset + 28;
+-    if (temp >= 32)
+-        temp -= 32;
+-    r7 = temp * 32;
+-    for (i = 0; i < 32; i += 2)
+-    {
+-        temp = cameraOffset->xTileOffset + i;
+-        if (temp >= 32)
+-            temp -= 32;
+-        DrawMetatileAt(mapLayout, r7 + temp, gSaveBlock1Ptr->pos.x + i / 2, gSaveBlock1Ptr->pos.y + 14);
+-    }
++    int i;
++
++    for (i = FIELD_CAMERA_VIEW_LEFT; i < FIELD_CAMERA_VIEW_RIGHT; i += 2)
++        DrawMetatileAtTilemapPos(mapLayout,
++                                 cameraOffset->xTileOffset + i,
++                                 cameraOffset->yTileOffset + FIELD_CAMERA_REDRAW_EDGE_Y * 2,
++                                 gSaveBlock1Ptr->pos.x + i / 2,
++                                 gSaveBlock1Ptr->pos.y + FIELD_CAMERA_REDRAW_EDGE_Y);
+ }
+ 
+ static void RedrawMapSliceSouth(struct FieldCameraOffset *cameraOffset, const struct MapLayout *mapLayout)
+ {
+-    u8 i;
+-    u8 temp;
+-    u32 r7 = cameraOffset->yTileOffset * 32;
+-
+-    for (i = 0; i < 32; i += 2)
+-    {
+-        temp = cameraOffset->xTileOffset + i;
+-        if (temp >= 32)
+-            temp -= 32;
+-        DrawMetatileAt(mapLayout, r7 + temp, gSaveBlock1Ptr->pos.x + i / 2, gSaveBlock1Ptr->pos.y);
+-    }
++    int i;
++
++    for (i = FIELD_CAMERA_VIEW_LEFT; i < FIELD_CAMERA_VIEW_RIGHT; i += 2)
++        DrawMetatileAtTilemapPos(mapLayout,
++                                 cameraOffset->xTileOffset + i,
++                                 cameraOffset->yTileOffset,
++                                 gSaveBlock1Ptr->pos.x + i / 2,
++                                 gSaveBlock1Ptr->pos.y);
+ }
+ 
+ static void RedrawMapSliceEast(struct FieldCameraOffset *cameraOffset, const struct MapLayout *mapLayout)
+ {
+     u8 i;
+-    u8 temp;
+-    u32 r6 = cameraOffset->xTileOffset;
++    int r6 = cameraOffset->xTileOffset + FIELD_CAMERA_VIEW_LEFT;
+ 
+     for (i = 0; i < 32; i += 2)
+-    {
+-        temp = cameraOffset->yTileOffset + i;
+-        if (temp >= 32)
+-            temp -= 32;
+-        DrawMetatileAt(mapLayout, temp * 32 + r6, gSaveBlock1Ptr->pos.x, gSaveBlock1Ptr->pos.y + i / 2);
+-    }
++        DrawMetatileAtTilemapPos(mapLayout,
++                                 r6,
++                                 cameraOffset->yTileOffset + i,
++                                 gSaveBlock1Ptr->pos.x + FIELD_CAMERA_VIEW_LEFT / 2,
++                                 gSaveBlock1Ptr->pos.y + i / 2);
+ }
+ 
+ static void RedrawMapSliceWest(struct FieldCameraOffset *cameraOffset, const struct MapLayout *mapLayout)
+ {
+     u8 i;
+-    u8 temp;
+-    u8 r5 = cameraOffset->xTileOffset + 28;
++    u8 r5 = cameraOffset->xTileOffset + FIELD_CAMERA_REDRAW_EDGE_X * 2;
+ 
+-    if (r5 >= 32)
+-        r5 -= 32;
+     for (i = 0; i < 32; i += 2)
+-    {
+-        temp = cameraOffset->yTileOffset + i;
+-        if (temp >= 32)
+-            temp -= 32;
+-        DrawMetatileAt(mapLayout, temp * 32 + r5, gSaveBlock1Ptr->pos.x + 14, gSaveBlock1Ptr->pos.y + i / 2);
+-    }
++        DrawMetatileAtTilemapPos(mapLayout,
++                                 r5,
++                                 cameraOffset->yTileOffset + i,
++                                 gSaveBlock1Ptr->pos.x + FIELD_CAMERA_REDRAW_EDGE_X,
++                                 gSaveBlock1Ptr->pos.y + i / 2);
+ }
++#endif
+ 
+ void CurrentMapDrawMetatileAt(int x, int y)
+ {
+@@ -224,11 +209,30 @@ void DrawDoorMetatileAt(int x, int y, const u16 *tiles)
+ 
+ static void DrawMetatileAt(const struct MapLayout *mapLayout, u16 offset, int x, int y)
+ {
++#ifdef PORT_BRIDGE
++    u16 metatileId = MapGridGetMetatileIdForCameraAt(x, y);
++#else
+     u16 metatileId = MapGridGetMetatileIdAt(x, y);
++#endif
+     const u16 *metatiles;
++#ifdef PORT_BRIDGE
++    bool8 isPrimary;
++    u16 rawMetatileId = metatileId;
++#endif
++#ifdef PLATFORM_3DS
++    // A neighbour with a bank of its own is drawn with its own tilesets.
++    const struct MapLayout *bankLayout = NULL;
++    u8 bank = MapGridGetCameraBankAt(x, y, &bankLayout);
++
++    if (bank != 0)
++        mapLayout = bankLayout;
++#endif
+ 
+     if (metatileId > NUM_METATILES_TOTAL)
+         metatileId = 0;
++#ifdef PORT_BRIDGE
++    isPrimary = metatileId < NUM_METATILES_IN_PRIMARY;
++#endif
+     if (metatileId < NUM_METATILES_IN_PRIMARY)
+         metatiles = mapLayout->primaryTileset->metatiles;
+     else
+@@ -236,7 +240,54 @@ static void DrawMetatileAt(const struct MapLayout *mapLayout, u16 offset, int x,
+         metatiles = mapLayout->secondaryTileset->metatiles;
+         metatileId -= NUM_METATILES_IN_PRIMARY;
+     }
++
++#ifdef PORT_BRIDGE
++    {
++        static bool8 sLoggedPrimaryMetatile;
++        const u16 *source = metatiles;
++
++        metatiles = Port_ResolveAssetPointer(metatiles);
++        if (!sLoggedPrimaryMetatile && isPrimary)
++        {
++            const u16 *tiles = metatiles + metatileId * NUM_TILES_PER_METATILE;
++
++            Port_SetGfxMetatileDebug(metatileId, metatiles != source,
++                                    tiles[0], tiles[1]);
++            PORT_LOG("Metatile P id=%03X src=%08lX dst=%08lX %04X/%04X\n",
++                    metatileId, (unsigned long)source, (unsigned long)metatiles,
++                    tiles[0], tiles[1]);
++            sLoggedPrimaryMetatile = TRUE;
++        }
++    }
++#endif
++
++#if defined(PLATFORM_3DS)
++    sDrawBank = bank;
++    DrawMetatile(UNPACK_LAYER_TYPE(bank != 0 ? GetMetatileAttributesFromLayout(bankLayout, rawMetatileId)
++                                             : GetMetatileAttributesById(rawMetatileId)),
++                 metatiles + metatileId * NUM_TILES_PER_METATILE, offset);
++    sDrawBank = 0;
++#elif defined(PORT_BRIDGE)
++    // The id is already in hand; MapGridGetMetatileLayerTypeAt would look the
++    // same cell up again (twice, with its asset resolution) for every metatile.
++    DrawMetatile(UNPACK_LAYER_TYPE(GetMetatileAttributesById(rawMetatileId)),
++                 metatiles + metatileId * NUM_TILES_PER_METATILE, offset);
++#else
+     DrawMetatile(MapGridGetMetatileLayerTypeAt(x, y), metatiles + metatileId * NUM_TILES_PER_METATILE, offset);
++#endif
++}
++
++static void DrawMetatileAtTilemapPos(const struct MapLayout *mapLayout, int tileX, int tileY, int mapX, int mapY)
++{
++    tileX &= FIELD_CAMERA_TILEMAP_WIDTH - 1;
++    tileY &= 31;
++
++#ifdef PORT_BRIDGE
++    if (tileX >= 32)
++        DrawMetatileAt(mapLayout, BG_SCREEN_SIZE / 2 + tileY * 32 + tileX - 32, mapX, mapY);
++    else
++#endif
++        DrawMetatileAt(mapLayout, tileY * 32 + tileX, mapX, mapY);
+ }
+ 
+ static void DrawMetatile(s32 metatileLayerType, const u16 *tiles, u16 offset)
+@@ -301,20 +352,59 @@ static void DrawMetatile(s32 metatileLayerType, const u16 *tiles, u16 offset)
+         gBGTilemapBuffers2[offset + 0x21] = tiles[7];
+         break;
+     }
++#if defined(PLATFORM_3DS)
++    {
++        // The empty and filler entries name no tile or palette of a bank, so
++        // all three layers take the metatile's bank as they are.
++        int bg;
++
++        for (bg = 0; bg < 3; bg++)
++        {
++            sTileBanks[bg][offset] = sDrawBank;
++            sTileBanks[bg][offset + 1] = sDrawBank;
++            sTileBanks[bg][offset + 0x20] = sDrawBank;
++            sTileBanks[bg][offset + 0x21] = sDrawBank;
++        }
++    }
++#endif
+     ScheduleBgCopyTilemapToVram(1);
+     ScheduleBgCopyTilemapToVram(2);
+     ScheduleBgCopyTilemapToVram(3);
+ }
+ 
++#if defined(PLATFORM_3DS)
++void FieldCamera_RegisterTileBanks(void)
++{
++    memset(sTileBanks, 0, sizeof(sTileBanks));
++    CtrVideo_RegisterTilemapBanks(gOverworldTilemapBuffer_Bg1, sTileBanks[0], BG_SCREEN_SIZE);
++    CtrVideo_RegisterTilemapBanks(gOverworldTilemapBuffer_Bg2, sTileBanks[1], BG_SCREEN_SIZE);
++    CtrVideo_RegisterTilemapBanks(gOverworldTilemapBuffer_Bg3, sTileBanks[2], BG_SCREEN_SIZE);
++}
++
++void FieldCamera_UnregisterTileBanks(void)
++{
++    CtrVideo_UnregisterTilemapBanks(gOverworldTilemapBuffer_Bg1);
++    CtrVideo_UnregisterTilemapBanks(gOverworldTilemapBuffer_Bg2);
++    CtrVideo_UnregisterTilemapBanks(gOverworldTilemapBuffer_Bg3);
++}
++#endif
++
+ static s32 MapPosToBgTilemapOffset(struct FieldCameraOffset *cameraOffset, s32 x, s32 y)
+ {
++#if defined(PLATFORM_3DS)
++    // In the window, wherever the picture has taken it.
++    if ((x - sMapWindowX) * 2 >= FIELD_CAMERA_VIEW_RIGHT || (x - sMapWindowX) * 2 < FIELD_CAMERA_VIEW_LEFT
++     || y < sMapWindowY || y >= sMapWindowY + 16)
++        return -1;
++    x = ((x - gSaveBlock1Ptr->pos.x) * 2 + cameraOffset->xTileOffset) & (FIELD_CAMERA_TILEMAP_WIDTH - 1);
++    y = ((y - gSaveBlock1Ptr->pos.y) * 2 + cameraOffset->yTileOffset) & 31;
++#else
+     x -= gSaveBlock1Ptr->pos.x;
+     x *= 2;
+-    if (x >= 32 || x < 0)
++    if (x >= FIELD_CAMERA_VIEW_RIGHT || x < FIELD_CAMERA_VIEW_LEFT)
+         return -1;
+     x = x + cameraOffset->xTileOffset;
+-    if (x >= 32)
+-        x -= 32;
++    x &= FIELD_CAMERA_TILEMAP_WIDTH - 1;
+ 
+     y = (y - gSaveBlock1Ptr->pos.y) * 2;
+     if (y >= 32 || y < 0)
+@@ -322,7 +412,12 @@ static s32 MapPosToBgTilemapOffset(struct FieldCameraOffset *cameraOffset, s32 x
+     y = y + cameraOffset->yTileOffset;
+     if (y >= 32)
+         y -= 32;
++#endif
+ 
++#ifdef PORT_BRIDGE
++    if (x >= 32)
++        return BG_SCREEN_SIZE / 2 + y * 32 + x - 32;
++#endif
+     return y * 32 + x;
+ }
+ 
+@@ -397,9 +492,9 @@ void CameraUpdate(void)
+     if (curMovementOffsetY != 0 && curMovementOffsetY == -movementSpeedY)
+     {
+         if (movementSpeedY > 0)
+-            deltaX = 1;
++            deltaY = 1;
+         else
+-            deltaX = -1;
++            deltaY = -1;
+     }
+ 
+     gFieldCamera.x += movementSpeedX;
+@@ -523,8 +618,15 @@ void UpdateCameraPanning(void)
+     if (sFieldCameraPanningCallback != NULL)
+         sFieldCameraPanningCallback();
+     // Update sprite offset of overworld objects
+-    gSpriteCoordOffsetX = gTotalCameraPixelOffsetX - sHorizontalCameraPan;
+-    gSpriteCoordOffsetY = gTotalCameraPixelOffsetY - sVerticalCameraPan - 8;
++    // Overworld sprites live in the same space as the map layers, so they take
++    // the same centring shift; otherwise the player would part company with
++    // the metatile it stands on.
++    gSpriteCoordOffsetX = gTotalCameraPixelOffsetX - sHorizontalCameraPan + FIELD_VIEW_OFFSET_X;
++    gSpriteCoordOffsetY = gTotalCameraPixelOffsetY - sVerticalCameraPan - 8 + FIELD_VIEW_OFFSET_Y;
++#if defined(PLATFORM_3DS)
++    gSpriteCoordOffsetX -= sEdgeShiftX;
++    gSpriteCoordOffsetY -= sEdgeShiftY;
++#endif
+ }
+ 
+ static void CameraPanningCB_PanAhead(void)
+diff --git a/src/field_door.c b/src/field_door.c
+index c3be102..2018fe3 100644
+--- a/src/field_door.c
++++ b/src/field_door.c
+@@ -5,6 +5,9 @@
+ #include "metatile_behavior.h"
+ #include "constants/songs.h"
+ #include "constants/metatile_labels.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ enum {
+     DOOR_SOUND_NORMAL,
+@@ -434,7 +437,9 @@ static s8 StartDoorAnimationTask(const struct DoorGraphics *gfx, const struct Do
+ 
+ static void DrawClosedDoor(const struct DoorGraphics *gfx, int x, int y)
+ {
+-    DrawClosedDoorTiles(gfx, x, y);
++    gfx = GetDoorGraphics(gfx, MapGridGetMetatileIdAt(x, y));
++    if (gfx != NULL)
++        DrawClosedDoorTiles(gfx, x, y);
+ }
+ 
+ static void DrawOpenedDoor(const struct DoorGraphics *gfx, int x, int y)
+diff --git a/src/field_effect.c b/src/field_effect.c
+index 1707cbd..b3ab0e4 100644
+--- a/src/field_effect.c
++++ b/src/field_effect.c
+@@ -31,6 +31,12 @@
+ 
+ extern struct CompressedSpritePalette gMonPaletteTable[]; // Intentionally declared (incorrectly) without const in order to match
+ extern const struct CompressedSpritePalette gTrainerFrontPicPaletteTable[];
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
++#if defined(PLATFORM_3DS)
++#include "3ds_video.h"
++#endif
+ extern const struct CompressedSpriteSheet gTrainerFrontPicTable[];
+ 
+ #define subsprite_table(ptr) {.subsprites = ptr, .subspriteCount = (sizeof ptr) / (sizeof(struct Subsprite))}
+@@ -773,6 +779,9 @@ static void Task_PokecenterHeal(u8 taskId)
+     struct Task *task = &gTasks[taskId];
+     sPokecenterHealEffectFuncs[task->tState](task);
+ }
++#ifdef PORT_BRIDGE
++    sheet = (struct SpriteSheet *)Port_ResolveAssetPointer(sheet);
++#endif
+ 
+ static void PokecenterHealEffect_Init(struct Task *task)
+ {
+@@ -781,6 +790,9 @@ static void PokecenterHealEffect_Init(struct Task *task)
+     task->tMonitorSpriteId = CreatePokecenterMonitorSprite(task->tMonitorX, task->tMonitorY);
+ }
+ 
++#ifdef PORT_BRIDGE
++    palette = (struct SpritePalette *)Port_ResolveAssetPointer(palette);
++#endif
+ static void PokecenterHealEffect_WaitForBallPlacement(struct Task *task)
+ {
+     if (gSprites[task->tGlowEffectSpriteId].sState >= 2)
+@@ -789,6 +801,9 @@ static void PokecenterHealEffect_WaitForBallPlacement(struct Task *task)
+         task->tState++;
+     }
+ }
++#ifdef PORT_BRIDGE
++    palette = (struct SpritePalette *)Port_ResolveAssetPointer(palette);
++#endif
+ 
+ static void PokecenterHealEffect_WaitForBallFlashing(struct Task *task)
+ {
+@@ -796,6 +811,7 @@ static void PokecenterHealEffect_WaitForBallFlashing(struct Task *task)
+         task->tState++;
+ }
+ 
++
+ static void PokecenterHealEffect_WaitForSoundAndEnd(struct Task *task)
+ {
+     if (gSprites[task->tGlowEffectSpriteId].sState > 6)
+@@ -1260,6 +1276,49 @@ static bool8 FallWarpEffect_6(struct Task *task)
+     SetCameraPanning(0, task->data[1]);
+     task->data[1] = -task->data[1];
+     task->data[2]++;
++#if defined(PLATFORM_3DS)
++// The healing machine's balls and monitors, and the Hall of Fame's, are placed
++// by hand on the 240x160 picture around the player rather than on the map: the
++// port moves them to where the machine is (3ds_video.c, DrawObjects).
++bool8 FieldEffect_IsMachineSprite(const struct Sprite *sprite)
++{
++    return sprite->template == &sSpriteTemplate_PokeballGlow
++        || sprite->template == &sSpriteTemplate_PokecenterMonitor
++        || sprite->template == &sSpriteTemplate_HofMonitorBig
++        || sprite->template == &sSpriteTemplate_HofMonitorSmall;
++}
++
++
++// Fly's bird and whoever rides it fly on the 240x160 picture around the
++// player too, as the GBA placed them by hand: the bird, the player while Fly
++// carries them off or brings them in, and the trainer NPCFlyOut carries away.
++// The port draws them around the player (3ds_video.c, PlaceScreenObject).
++bool8 FieldEffect_IsFlySprite(const struct Sprite *sprite)
++{
++    u32 i;
++
++    if (sprite->template == gFieldEffectObjectTemplatePointers[FLDEFFOBJ_BIRD])
++        return TRUE;
++    if ((FieldEffectActiveListContains(FLDEFF_USE_FLY) || FieldEffectActiveListContains(FLDEFF_FLY_IN))
++     && sprite == &gSprites[gPlayerAvatar.spriteId])
++        return TRUE;
++    for (i = 0; i < MAX_SPRITES; i++)
++    {
++        if (gSprites[i].inUse && gSprites[i].callback == SpriteCB_NPCFlyOut && gSprites[i].data[0]
++         && sprite == &gSprites[gSprites[i].data[1]])
++            return TRUE;
++    }
++    return FALSE;
++}
++
++// The swoop starts and ends off the GBA screen, 140 pixels either side of
++// the player: on the wider one the bird came into sight there. Widened by
++// cos^3, which leaves the path round the player as it was.
++#define FlySwoopX(angle) (Cos(angle, 0x8c) + Cos(angle, Cos(angle, Cos(angle, FIELD_VIEW_OFFSET_X + 32))))
++#else
++#define FlySwoopX(angle) Cos(angle, 0x8c)
++#endif
++
+     if ((task->data[2] & 3) == 0)
+     {
+         task->data[1] >>= 1;
+@@ -2548,6 +2607,30 @@ static void ShowMonEffect_Outdoors_7(struct Task *task);
+ static void VBlankCB_ShowMonEffect_Outdoors(void);
+ static void LoadFieldMoveStreaksTilemapToVram(u16 screenbase);
+ static void Task_ShowMon_Indoors(u8 taskId);
++#if defined(PLATFORM_3DS)
++// A window edge is 8 bits, so the 400px screen cannot be spanned with the
++// GBA's DISPLAY_WIDTH + 1: 401 wraps to a window over x=1..145 that outlived
++// the effect and left the rest of the field black. 255 is what the compositor
++// reads as the edge of the screen (WindowEdge in 3ds_video.c). The streaks are
++// the GBA's 10 tile rows at y=40..120, so the band keeps the GBA's height and
++// the background and the mon move down to the middle of the taller screen.
++#define SHOW_MON_WIN_RIGHT   255
++#define SHOW_MON_WIN_CLOSED  WIN_RANGE(255, 255)
++#define SHOW_MON_WIN_FULL    WIN_RANGE(0, 255)
++#define SHOW_MON_BANNER_DROP ((DISPLAY_HEIGHT - 160) / 2)
++#define SHOW_MON_BANNER_TOP  (160 / 4 + SHOW_MON_BANNER_DROP)
++#define SHOW_MON_BANNER_END  (160 * 3 / 4 + SHOW_MON_BANNER_DROP)
++#define SHOW_MON_START_X     (DISPLAY_WIDTH + 80)
++#else
++#define SHOW_MON_WIN_RIGHT   DISPLAY_WIDTH
++#define SHOW_MON_WIN_CLOSED  WIN_RANGE(DISPLAY_WIDTH, DISPLAY_WIDTH + 1)
++#define SHOW_MON_WIN_FULL    (DISPLAY_WIDTH + 1)
++#define SHOW_MON_BANNER_DROP 0
++#define SHOW_MON_BANNER_TOP  (DISPLAY_HEIGHT / 4)
++#define SHOW_MON_BANNER_END  (DISPLAY_WIDTH / 2)
++#define SHOW_MON_START_X     320
++#endif
++
+ static void ShowMonEffect_Indoors_1(struct Task *task);
+ static void ShowMonEffect_Indoors_2(struct Task *task);
+ static void ShowMonEffect_Indoors_3(struct Task *task);
+@@ -2624,6 +2707,9 @@ static void ShowMonEffect_Outdoors_2(struct Task *task)
+ {
+     u16 charbase = ((GetGpuReg(REG_OFFSET_BG0CNT) >> 2) << 14);
+     u16 screenbase = ((GetGpuReg(REG_OFFSET_BG0CNT) >> 8) << 11);
++#if defined(PLATFORM_3DS)
++    CtrVideo_SetFieldBanner(TRUE);
++#endif
+     CpuCopy16(sFieldMoveStreaksOutdoors_Gfx, (void *)(VRAM + charbase), 0x200);
+     CpuFill32(0, (void *)(VRAM + screenbase), 0x800);
+     LoadPalette(sFieldMoveStreaksOutdoors_Pal, BG_PLTT_ID(15), sizeof(sFieldMoveStreaksOutdoors_Pal));
+@@ -2716,6 +2802,9 @@ static void ShowMonEffect_Outdoors_7(struct Task *task)
+     ChangeBgX(0, 0, 0);
+     ChangeBgY(0, 0, 0);
+     Menu_LoadStdPal();
++#if defined(PLATFORM_3DS)
++    CtrVideo_SetFieldBanner(FALSE);
++#endif
+     FreeResourcesAndDestroySprite(&gSprites[task->data[15]], task->data[15]);
+     FieldEffectActiveListRemove(FLDEFF_FIELD_MOVE_SHOW_MON);
+     DestroyTask(FindTaskIdByFunc(Task_ShowMon_Outdoors));
+@@ -2845,6 +2934,9 @@ static void VBlankCB_ShowMonEffect_Indoors(void)
+     IntrCallback intrCallback;
+     struct Task *task;
+     task = &gTasks[FindTaskIdByFunc(Task_ShowMon_Indoors)];
++#if defined(PLATFORM_3DS)
++    CtrVideo_SetFieldBanner(FALSE);
++#endif
+     LoadWordFromTwoHalfwords((u16 *)&task->data[13], (u32 *)&intrCallback);
+     intrCallback();
+     SetGpuReg(REG_OFFSET_BG0HOFS, task->data[1]);
+@@ -2873,6 +2965,11 @@ static bool8 SlideIndoorBannerOnscreen(struct Task *task)
+         dstOffs = (32 - dstOffs) & 0x1f;
+         srcOffs = (32 - task->data[4]) & 0x1f;
+         dest = (u16 *)(VRAM + 0x140 + (u16)task->data[12]);
++    const u16 *tilemap = sFieldMoveStreaksIndoors_Tilemap;
++#ifdef PORT_BRIDGE
++    // The INCBIN stub, resolved (see LoadFieldMoveOutdoorStreaksTilemap).
++    tilemap = Port_ResolveAssetPointerSized(tilemap, sizeof(sFieldMoveStreaksIndoors_Tilemap));
++#endif
+         for (i = 0; i < 10; i++)
+         {
+             dest[dstOffs + i * 32] = sFieldMoveStreaksIndoors_Tilemap[srcOffs + i * 32];
+@@ -3155,7 +3252,7 @@ static void SpriteCB_NPCFlyOut(struct Sprite *sprite)
+ {
+     struct Sprite *npcSprite;
+ 
+-    sprite->x2 = Cos(sprite->data[2], 0x8c);
++    sprite->x2 = FlySwoopX(sprite->data[2]);
+     sprite->y2 = Sin(sprite->data[2], 0x48);
+     sprite->data[2] = (sprite->data[2] + 4) & 0xff;
+     if (sprite->data[0])
+@@ -3939,6 +4036,20 @@ static void DestroyDeoxysRockEffect_CameraShake(s16 *data, u8 taskId)
+ 
+ static void DestroyDeoxysRockEffect_RockFragments(s16 *data, u8 taskId)
+ {
++
++#ifdef PORT_BRIDGE
++// FieldCallback_UseFly from the field as it is (the bottom screen's Fly map,
++// party_menu.c's CtrParty_Fly): no fade to come in from, the player perhaps
++// walking.
++void CtrFly_Start(void)
++{
++    CreateTask(Task_UseFly, 0);
++    LockPlayerFieldControls();
++    // The player may be mid-step: it ends it (FlyOutFieldEffect_FieldMovePose
++    // waits for that), held from taking another.
++    FreezeObjectEventsExceptOne(gPlayerAvatar.objectEventId);
++}
++#endif
+     if (++tTimer > 120)
+     {
+         struct Sprite *sprite = &gSprites[gObjectEvents[tObjectEventId].spriteId];
+diff --git a/src/field_player_avatar.c b/src/field_player_avatar.c
+index ef086dd..3aad90a 100644
+--- a/src/field_player_avatar.c
++++ b/src/field_player_avatar.c
+@@ -1091,6 +1091,13 @@ u8 GetPlayerMovementDirection(void)
+ 
+ u8 PlayerGetElevation(void)
+ {
++#ifdef PORT_BRIDGE
++    struct ObjectEvent *playerObjEvent = &gObjectEvents[gPlayerAvatar.objectEventId];
++    u8 mapElevation = MapGridGetElevationAt(playerObjEvent->currentCoords.x, playerObjEvent->currentCoords.y);
++
++    if (mapElevation != 0 && mapElevation != 15)
++        return mapElevation;
++#endif
+     return gObjectEvents[gPlayerAvatar.objectEventId].previousElevation;
+ }
+ 
+@@ -1288,6 +1295,9 @@ void InitPlayerAvatar(s16 x, s16 y, u8 direction, u8 gender)
+     struct ObjectEventTemplate playerObjEventTemplate;
+     u8 objectEventId;
+     struct ObjectEvent *objectEvent;
++#ifdef PORT_BRIDGE
++    u8 mapElevation;
++#endif
+ 
+     playerObjEventTemplate.localId = LOCALID_PLAYER;
+     playerObjEventTemplate.graphicsId = GetPlayerAvatarGraphicsIdByStateIdAndGender(PLAYER_AVATAR_GFX_NORMAL, gender);
+diff --git a/src/field_weather.c b/src/field_weather.c
+index 56cf650..7e96251 100644
+--- a/src/field_weather.c
++++ b/src/field_weather.c
+@@ -10,9 +10,27 @@
+ #include "constants/field_weather.h"
+ #include "constants/weather.h"
+ #include "constants/songs.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define DROUGHT_COLOR_INDEX(color) ((((color) >> 1) & 0xF) | (((color) >> 2) & 0xF0) | (((color) >> 3) & 0xF00))
+ 
++#ifdef PLATFORM_3DS
++/*
++ * The ext palettes (include/palette.h) are palettes 32 and up here, where they
++ * sit in the buffers, and take the colour map of an NPC's palette, their
++ * model: WEATHER_PAL is the palette whose treatment palette curPalIndex gets.
++ * A pass over every palette goes on to the last one in use.
++ */
++#define WEATHER_PAL(curPalIndex) ((curPalIndex) < 32 ? (curPalIndex) : 16 + PLTT_EXT_MODEL)
++#define WEATHER_PAL_COUNT (32 + (gPlttExtInUse ? 32 - __builtin_clz(gPlttExtInUse) : 0))
++STATIC_ASSERT(PLTT_EXT_MODEL == PALSLOT_NPC_1, ExtPalettesModelIsAnNpc);
++#else
++#define WEATHER_PAL(curPalIndex) (curPalIndex)
++#define WEATHER_PAL_COUNT 32
++#endif
++
+ enum
+ {
+     GAMMA_NONE,
+@@ -70,6 +88,16 @@ static const struct WeatherCallbacks sWeatherFuncs[] = {
+     {Clouds_InitVars, Clouds_Main, Clouds_InitAll, Clouds_Finish},
+     {Sunny_InitVars, Sunny_Main, Sunny_InitAll, Sunny_Finish},
+     {Rain_InitVars, Rain_Main, Rain_InitAll, Rain_Finish},
++#ifdef PORT_BRIDGE
++// The table is an INCBIN stub here: read directly, every drought colour was black.
++static const u16 *GetDroughtWeatherColors(s8 colorMapIndex)
++{
++    const u16 (*colors)[0x1000] = Port_ResolveAssetPointerSized(sDroughtWeatherColors, sizeof(sDroughtWeatherColors));
++
++    return colors[colorMapIndex];
++}
++#endif
++
+     {Snow_InitVars, Snow_Main, Snow_InitAll, Snow_Finish},
+     {Thunderstorm_InitVars, Thunderstorm_Main, Thunderstorm_InitAll, Thunderstorm_Finish},
+     {FogHorizontal_InitVars, FogHorizontal_Main, FogHorizontal_InitAll, FogHorizontal_Finish},
+@@ -582,6 +610,38 @@ static void ApplyDroughtGammaShiftWithBlend(s8 gammaIndex, u8 blendCoeff, u16 bl
+                 u8 r1, g1, b1;
+                 u8 r2, g2, b2;
+ 
++#ifdef PLATFORM_3DS
++// The ext palettes in use when [startPalIndex, +numPalettes) holds their model.
++static u32 WeatherExtPalettes(u8 startPalIndex, u8 numPalettes)
++{
++    u8 model = 16 + PLTT_EXT_MODEL;
++
++    return startPalIndex <= model && model < startPalIndex + numPalettes ? gPlttExtInUse : 0;
++}
++
++static void ApplyColorMap(u8 startPalIndex, u8 numPalettes, s8 colorMapIndex)
++{
++    u32 ext = WeatherExtPalettes(startPalIndex, numPalettes);
++    u8 i;
++
++    ApplyColorMapToRange(startPalIndex, numPalettes, colorMapIndex);
++    for (i = 32; ext; i++, ext >>= 1)
++        if (ext & 1)
++            ApplyColorMapToRange(i, 1, colorMapIndex);
++}
++
++static void ApplyColorMapWithBlend(u8 startPalIndex, u8 numPalettes, s8 colorMapIndex, u8 blendCoeff, u16 blendColor)
++{
++    u32 ext = WeatherExtPalettes(startPalIndex, numPalettes);
++    u8 i;
++
++    ApplyColorMapWithBlendToRange(startPalIndex, numPalettes, colorMapIndex, blendCoeff, blendColor);
++    for (i = 32; ext; i++, ext >>= 1)
++        if (ext & 1)
++            ApplyColorMapWithBlendToRange(i, 1, colorMapIndex, blendCoeff, blendColor);
++}
++#endif
++
+                 color1 = *(struct RGBColor *)&gPlttBufferUnfaded[palOffset];
+                 r1 = color1.r;
+                 g1 = color1.g;
+@@ -611,9 +671,9 @@ static void ApplyFogBlend(u8 blendCoeff, u16 blendColor)
+     gBlend = color.g;
+     bBlend = color.b;
+ 
+-    for (curPalIndex = 16; curPalIndex < 32; curPalIndex++)
++    for (curPalIndex = 16; curPalIndex < WEATHER_PAL_COUNT; curPalIndex++)
+     {
+-        if (LightenSpritePaletteInFog(curPalIndex))
++        if (LightenSpritePaletteInFog(WEATHER_PAL(curPalIndex)))
+         {
+             u16 palEnd = PLTT_ID(curPalIndex + 1);
+             u16 palOffset = PLTT_ID(curPalIndex);
+@@ -735,7 +795,7 @@ void FadeScreen(u8 mode, s8 delay)
+     if (fadeOut)
+     {
+         if (useWeatherPal)
+-            CpuFastCopy(gPlttBufferFaded, gPlttBufferUnfaded, PLTT_SIZE);
++            CpuFastCopy(gPlttBufferFaded, gPlttBufferUnfaded, PLTT_BUFFER_BYTES);
+ 
+         BeginNormalPaletteFade(PALETTES_ALL, delay, 0, 16, fadeColor);
+         gWeatherPtr->palProcessingState = WEATHER_PAL_STATE_SCREEN_FADING_OUT;
+@@ -799,6 +859,43 @@ void FadeSelectedPals(u8 mode, s8 delay, u32 selectedPalettes)
+         useWeatherPal = FALSE;
+         break;
+     }
++#ifdef PLATFORM_3DS
++/*
++ * An ext palette just loaded on the field (sprite.c, LoadSpritePaletteExt)
++ * brought to what its model, an NPC's palette, shows now: as
++ * UpdateSpritePaletteWithWeather does for a sprite palette, except that fog
++ * never lightens it, as it never lightens the NPCs'.
++ */
++void UpdateSpritePaletteExtWithWeather(u8 extPalette)
++{
++    u16 paletteIndex = 32 + extPalette;
++    u16 i;
++
++    if (extPalette >= PLTT_EXT_COUNT)
++        return;
++    switch (gWeatherPtr->palProcessingState)
++    {
++    case WEATHER_PAL_STATE_SCREEN_FADING_IN:
++        if (gWeatherPtr->fadeInFirstFrame)
++        {
++            paletteIndex = PLTT_ID(paletteIndex);
++            for (i = 0; i < 16; i++)
++                gPlttBufferFaded[paletteIndex + i] = gWeatherPtr->fadeDestColor;
++        }
++        break;
++    case WEATHER_PAL_STATE_SCREEN_FADING_OUT:
++        paletteIndex = PLTT_ID(paletteIndex);
++        CpuFastCopy(&gPlttBufferFaded[paletteIndex], &gPlttBufferUnfaded[paletteIndex], PLTT_SIZE_4BPP);
++        BlendPalette(paletteIndex, 16, gPaletteFade.y, gPaletteFade.blendColor);
++        break;
++    default:
++        // Fog's colour map is 0: the NPCs keep their own colours in it.
++        ApplyColorMapToRange(paletteIndex, 1, gWeatherPtr->colorMapIndex);
++        break;
++    }
++}
++#endif
++
+ 
+     if (fadeOut)
+     {
+diff --git a/src/fieldmap.c b/src/fieldmap.c
+index 4156777..81829b0 100644
+--- a/src/fieldmap.c
++++ b/src/fieldmap.c
+@@ -6,6 +6,7 @@
+ #include "quest_log.h"
+ #include "fieldmap.h"
+ 
++#include "malloc.h"
+ struct ConnectionFlags
+ {
+     u8 south:1;
+@@ -17,6 +18,22 @@ struct ConnectionFlags
+ COMMON_DATA struct BackupMapLayout VMap = {0};
+ EWRAM_DATA u16 gBackupMapData[VIRTUAL_MAP_SIZE] = {};
+ EWRAM_DATA struct MapHeader gMapHeader = {};
++#ifdef PORT_BRIDGE
++#include "port_log.h"
++#include "port_platform.h"
++#endif
++#ifdef PLATFORM_3DS
++#include "3ds_log.h"
++#include "3ds_platform.h"
++#include "3ds_tile_banks.h"
++#include "3ds_video.h"
++#endif
++#ifdef PORT_BRIDGE
++#define PORT_PROF(label) Port_ProfileMark(label)
++#else
++#define PORT_PROF(label) ((void)0)
++#endif
++
+ EWRAM_DATA struct Camera gCamera = {};
+ static EWRAM_DATA struct ConnectionFlags gMapConnectionFlags = {};
+ EWRAM_DATA u8 gGlobalFieldTintMode = QL_TINT_NONE;
+@@ -120,6 +137,11 @@ static void InitBackupMapLayoutData(const u16 *map, u16 width, u16 height)
+ 
+     for (y = 0; y < height; y++)
+     {
++
++#ifdef PORT_BRIDGE
++    map = Port_ResolveAssetPointer(map);
++#endif
++
+         CpuCopy16(map, dest, width * sizeof(u16));
+         dest += width + MAP_OFFSET_W;
+         map += width;
+@@ -178,7 +200,11 @@ static void FillConnection(s32 x, s32 y, const struct MapHeader *connectedMapHea
+     s32 mapWidth;
+ 
+     mapWidth = connectedMapHeader->mapLayout->width;
+-    src = &connectedMapHeader->mapLayout->map[mapWidth * y2 + x2];
++    src = connectedMapHeader->mapLayout->map;
++#ifdef PORT_BRIDGE
++    src = Port_ResolveAssetPointer(src);
++#endif
++    src += mapWidth * y2 + x2;
+     dest = &VMap.map[VMap.Xsize * y + x];
+ 
+     for (i = 0; i < height; i++)
+@@ -377,6 +403,9 @@ u32 MapGridGetMetatileIdAt(s32 x, s32 y)
+ u32 ExtractMetatileAttribute(u32 attributes, u8 attributeType)
+ {
+     if (attributeType >= METATILE_ATTRIBUTE_COUNT) // Check for METATILE_ATTRIBUTES_ALL
++#ifdef PORT_BRIDGE
++    Port_SetAssetDebugEx(0x0332, metatile, x, y, 0);
++#endif
+         return attributes;
+ 
+     return (attributes & sMetatileAttrMasks[attributeType]) >> sMetatileAttrShifts[attributeType];
+@@ -936,8 +965,20 @@ void CopyMapTilesetsToVram(struct MapLayout const *mapLayout)
+ {
+     if (mapLayout)
+     {
++#ifdef PORT_BRIDGE
++        // Returning from a UI or battle must use the same buffer ownership as
++        // the initial map load. Publish both tilesets before drawing the map.
++        CopyPrimaryTilesetToVram(mapLayout);
++        // Release the primary temporary before allocating the secondary one.
++        while (FreeTempTileDataBuffersIfPossible())
++            ;
++        CopySecondaryTilesetToVram(mapLayout);
++        while (FreeTempTileDataBuffersIfPossible())
++            ;
++#else
+         CopyTilesetToVramUsingHeap(mapLayout->primaryTileset, NUM_TILES_IN_PRIMARY, 0);
+         CopyTilesetToVramUsingHeap(mapLayout->secondaryTileset, NUM_TILES_TOTAL - NUM_TILES_IN_PRIMARY, NUM_TILES_IN_PRIMARY);
++#endif
+     }
+ }
+ 
+diff --git a/src/fldeff_flash.c b/src/fldeff_flash.c
+index ffc11a2..8f50297 100644
+--- a/src/fldeff_flash.c
++++ b/src/fldeff_flash.c
+@@ -160,6 +160,9 @@ static const u16 sCaveTransitionPalette_Black[] = INCBIN_U16("graphics/cave_tran
+ static const u16 sCaveTransitionPalette[] = INCBIN_U16("graphics/cave_transition/tiles.gbapal");
+ static const u32 sCaveTransitionTilemap[] = INCBIN_U32("graphics/cave_transition/tilemap.bin.lz");
+ static const u32 sCaveTransitionTiles[] = INCBIN_U32("graphics/cave_transition/tiles.4bpp.lz");
++#define CAVE_TRANSITION_SCREENBASE 31
++#define CAVE_TRANSITION_SCREENSIZE BGCNT_TXT256x256
++#endif
+ 
+ bool8 SetUpFieldMove_Flash(void)
+ {
+diff --git a/src/gpu_regs.c b/src/gpu_regs.c
+index 2f52c5b..28fe8f0 100644
+--- a/src/gpu_regs.c
++++ b/src/gpu_regs.c
+@@ -9,8 +9,8 @@
+ 
+ static u8 sGpuRegBuffer[GPU_REG_BUF_SIZE];
+ static u8 sGpuRegWaitingList[GPU_REG_BUF_SIZE];
+-static volatile bool8 sGpuRegBufferLocked;
+-static volatile bool8 sShouldSyncRegIE;
++static vbool8 sGpuRegBufferLocked;
++static vbool8 sShouldSyncRegIE;
+ static vu16 sRegIE;
+ 
+ static void CopyBufferedValueToGpuReg(u8 regOffset);
+@@ -62,7 +62,11 @@ void CopyBufferedValuesToGpuRegs(void)
+ 	}
+ }
+ 
++#ifdef PLATFORM_3DS
++static void SetGpuReg16(u8 regOffset, u16 value)
++#else
+ void SetGpuReg(u8 regOffset, u16 value)
++#endif
+ {
+ 	if (regOffset < GPU_REG_BUF_SIZE)
+ 	{
+diff --git a/src/libgcnmultiboot.s b/src/libgcnmultiboot.s
+index e6e8c8d..a4a45cb 100644
+--- a/src/libgcnmultiboot.s
++++ b/src/libgcnmultiboot.s
+@@ -238,11 +238,11 @@ GameCubeMultiBoot_Main_Return2:
+ 
+ 	.align 2, 0
+ 
+-pool_HashVal: .4byte 0xa1c1
++pool_HashVal: .int 0xa1c1
+ 
+ pool_Kawa: .ascii "Kawa" @ name of BIOS developer
+ 
+-pool_NintendoLogo: .4byte RomHeaderNintendoLogo
++pool_NintendoLogo: .int RomHeaderNintendoLogo
+ 
+ 	thumb_func_start GameCubeMultiBoot_ExecuteProgram
+ @ void GameCubeMultiBoot_ExecuteProgram(struct GameCubeMultiBoot *mb)@
+@@ -628,14 +628,14 @@ GameCubeMultiBoot_Quit:
+ 
+ GameCubeMultiBoot_MaximumImageSizeUInt32s: .4byte 0x00004000
+ 
+-pool_InterruptRegs: .4byte REG_BASE + 0x200
++pool_InterruptRegs: .int REG_BASE + 0x200
+ 
+-pool_SerialRegs: .4byte REG_BASE + 0x120
++pool_SerialRegs: .int REG_BASE + 0x120
+ 
+-pool_RegDispstat: .4byte REG_DISPSTAT
++pool_RegDispstat: .int REG_DISPSTAT
+ 
+ pool_RubyUSAGameCode: .ascii "AXVE"
+ 
+-pool_MultiBootLoadAddr: .4byte EWRAM_START
++pool_MultiBootLoadAddr: .int EWRAM_START
+ 
+ 	.align 2, 0 @ Don't pad with nop.
+diff --git a/src/librfu_intr.c b/src/librfu_intr.c
+index e97072a..56bc332 100644
+--- a/src/librfu_intr.c
++++ b/src/librfu_intr.c
+@@ -401,17 +401,23 @@ static void Callback_Dummy_M(int reqCommandId, int error, void (*callbackM)())
+ static void Callback_Dummy_M(int reqCommandId, int error, void (*callbackM)(...))
+ #endif
+ {
++#ifndef PORTABLE
+     asm("bx r2");
++#endif
+ }
+ 
+ NAKED
+ static void Callback_Dummy_S(u16 reqCommandId, void (*callbackS)(u16))
+ {
++#ifndef PORTABLE
+     asm("bx r1");
++#endif
+ }
+ 
+ NAKED
+ static void Callback_Dummy_ID(void (*callbackId)(void))
+ {
++#ifndef PORTABLE
+     asm("bx r0");
++#endif
+ }
+diff --git a/src/librfu_rfu.c b/src/librfu_rfu.c
+index 76e2158..f7ed514 100644
+--- a/src/librfu_rfu.c
++++ b/src/librfu_rfu.c
+@@ -124,6 +124,7 @@ static const char str_checkMbootLL[] = "RFU-MBOOT";
+         *_dst++ = *_src++;                          \
+ } while (0)
+ 
++#ifndef PORTABLE
+ u16 rfu_initializeAPI(u32 *APIBuffer, u16 buffByteSize, IntrFunc *sioIntrTable_p, bool8 copyInterruptToRam)
+ {
+     u16 i;
+@@ -191,6 +192,7 @@ u16 rfu_initializeAPI(u32 *APIBuffer, u16 buffByteSize, IntrFunc *sioIntrTable_p
+     gRfuFixed->fastCopyPtr = (void *)gRfuFixed->fastCopyBuffer + 1;
+     return 0;
+ }
++#endif
+ 
+ static void rfu_STC_clearAPIVariables(void)
+ {
+@@ -328,6 +330,7 @@ u16 rfu_getRFUStatus(u8 *rfuState)
+  * }
+  * Returns 1 if the packet to inherit is malformed.
+  */
++#ifndef PORTABLE
+ u16 rfu_MBOOT_CHILD_inheritanceLinkStatus(void)
+ {
+     const char *s1 = str_checkMbootLL;
+@@ -352,6 +355,7 @@ u16 rfu_MBOOT_CHILD_inheritanceLinkStatus(void)
+     gRfuStatic->flags |= 0x80; // mboot
+     return 0;
+ }
++#endif
+ 
+ void rfu_REQ_stopMode(void)
+ {
+@@ -434,7 +438,11 @@ void rfu_REQ_configSystem(u16 availSlotFlag, u8 maxMFrame, u8 mcTimer)
+         u16 IMEBackup = REG_IME;
+ 
+         REG_IME = 0;
++#ifndef PORTABLE
+         gRfuStatic->linkEmergencyLimit = Div(600, mcTimer);
++#else
++        gRfuStatic->linkEmergencyLimit = 600 / mcTimer;
++#endif
+         REG_IME = IMEBackup;
+     }
+ }
+diff --git a/src/link.c b/src/link.c
+index 84506bf..ef36b98 100644
+--- a/src/link.c
++++ b/src/link.c
+@@ -1634,6 +1634,7 @@ void LinkPlayerFromBlock(u32 who)
+     }
+ }
+ 
++#ifndef PORTABLE
+ // When this function returns TRUE the callbacks are skipped
+ bool8 HandleLinkConnection(void)
+ {
+@@ -1686,6 +1687,7 @@ bool8 HandleLinkConnection(void)
+     }
+     return FALSE;
+ }
++#endif
+ 
+ void SetWirelessCommType1(void)
+ {
+diff --git a/src/link_rfu_2.c b/src/link_rfu_2.c
+index 78087d7..8389acf 100644
+--- a/src/link_rfu_2.c
++++ b/src/link_rfu_2.c
+@@ -313,6 +313,7 @@ void InitRFU(void)
+     REG_IME = INTR_FLAG_VBLANK;
+ }
+ 
++#ifndef PORTABLE
+ void InitRFUAPI(void)
+ {
+     if (!rfu_initializeAPI(sRfuAPIBuffer, RFU_API_BUFF_SIZE_RAM, &gIntrTable[1], TRUE))
+@@ -324,6 +325,7 @@ void InitRFUAPI(void)
+         rfu_setTimerInterrupt(3, &gIntrTable[2]);
+     }
+ }
++#endif
+ 
+ static void Task_ParentSearchForChildren(u8 taskId)
+ {
+diff --git a/src/load_save.c b/src/load_save.c
+index 8b723dd..3210555 100644
+--- a/src/load_save.c
++++ b/src/load_save.c
+@@ -47,7 +47,11 @@ void CheckForFlashMemory(void)
+ {
+     if (!IdentifyFlash())
+     {
++#ifdef PORT_BRIDGE
++        gFlashMemoryPresent = Port_SaveIsAvailable();
++#else
+         gFlashMemoryPresent = TRUE;
++#endif
+         InitFlashTimer();
+     }
+     else
+@@ -102,18 +106,30 @@ void MoveSaveBlocks_ResetHeap(void)
+     pokemonStorageCopy = (struct PokemonStorage *)(gHeap + sizeof(struct SaveBlock2) + sizeof(struct SaveBlock1));
+ 
+     // backup the saves.
++#ifdef PORTABLE
++    CpuCopy32(gSaveBlock2Ptr, saveBlock2Copy, sizeof(*gSaveBlock2Ptr));
++    CpuCopy32(gSaveBlock1Ptr, saveBlock1Copy, sizeof(*gSaveBlock1Ptr));
++    CpuCopy32(gPokemonStoragePtr, pokemonStorageCopy, sizeof(*gPokemonStoragePtr));
++#else
+     *saveBlock2Copy = *gSaveBlock2Ptr;
+     *saveBlock1Copy = *gSaveBlock1Ptr;
+     *pokemonStorageCopy = *gPokemonStoragePtr;
++#endif
+ 
+     // change saveblocks' pointers
+     SetSaveBlocksPointers(); // unlike Emerald, this does not use
+                              // the trainer ID sum for an offset.
+ 
+     // restore saveblock data since the pointers changed
++#ifdef PORTABLE
++    CpuCopy32(saveBlock2Copy, gSaveBlock2Ptr, sizeof(*saveBlock2Copy));
++    CpuCopy32(saveBlock1Copy, gSaveBlock1Ptr, sizeof(*saveBlock1Copy));
++    CpuCopy32(pokemonStorageCopy, gPokemonStoragePtr, sizeof(*pokemonStorageCopy));
++#else
+     *gSaveBlock2Ptr = *saveBlock2Copy;
+     *gSaveBlock1Ptr = *saveBlock1Copy;
+     *gPokemonStoragePtr = *pokemonStorageCopy;
++#endif
+ 
+     // heap was destroyed in the copying process, so reset it
+     InitHeap(gHeap, HEAP_SIZE);
+diff --git a/src/m4a_tables.c b/src/m4a_tables.c
+index 286e938..a2b62e1 100644
+--- a/src/m4a_tables.c
++++ b/src/m4a_tables.c
+@@ -5,41 +5,41 @@
+ // for now.
+ void *const gMPlayJumpTableTemplate[] =
+ {
+-    ply_fine,
+-    ply_goto,
+-    ply_patt,
+-    ply_pend,
+-    ply_rept,
+-    ply_fine,
+-    ply_fine,
+-    ply_fine,
+-    ply_fine,
+-    ply_prio,
+-    ply_tempo,
+-    ply_keysh,
+-    ply_voice,
+-    ply_vol,
+-    ply_pan,
+-    ply_bend,
+-    ply_bendr,
+-    ply_lfos,
+-    ply_lfodl,
+-    ply_mod,
+-    ply_modt,
+-    ply_fine,
+-    ply_fine,
+-    ply_tune,
+-    ply_fine,
+-    ply_fine,
+-    ply_fine,
+-    ply_port,
+-    ply_fine,
+-    ply_endtie,
++    MP2K_event_fine,
++    MP2K_event_goto,
++    MP2K_event_patt,
++    MP2K_event_pend,
++    MP2K_event_rept,
++    MP2K_event_fine,
++    MP2K_event_fine,
++    MP2K_event_fine,
++    MP2K_event_fine,
++    MP2K_event_prio,
++    MP2K_event_tempo,
++    MP2K_event_keysh,
++    MP2K_event_voice,
++    MP2K_event_vol,
++    MP2K_event_pan,
++    MP2K_event_bend,
++    MP2K_event_bendr,
++    MP2K_event_lfos,
++    MP2K_event_lfodl,
++    MP2K_event_mod,
++    MP2K_event_modt,
++    MP2K_event_fine,
++    MP2K_event_fine,
++    MP2K_event_tune,
++    MP2K_event_fine,
++    MP2K_event_fine,
++    MP2K_event_fine,
++    MP2K_event_port,
++    MP2K_event_fine,
++    MP2K_event_endtie,
+     SampleFreqSet,
+     TrackStop,
+     FadeOutBody,
+     TrkVolPitSet,
+-    RealClearChain,
++    MP2KClearChain,
+     SoundMainBTM,
+ };
+ 
+@@ -112,7 +112,7 @@ const u16 gPcmSamplesPerVBlankTable[] =
+     528,
+     608,
+     672,
+-    704,
++    701,
+ };
+ 
+ const u8 gCgbScaleTable[] =
+@@ -303,6 +303,6 @@ const XcmdFunc gXcmdTable[] =
+     ply_xiecl,
+     ply_xleng,
+     ply_xswee,
+-    ply_xwait,
++    ply_xcmd_0C,
+     ply_xcmd_0D,
+ };
+diff --git a/src/main.c b/src/main.c
+index 542b0f5..b97103f 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -19,6 +19,11 @@
+ 
+ extern u32 intr_main[];
+ 
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#include "port_log.h"
++#endif
++
+ static void VBlankIntr(void);
+ static void HBlankIntr(void);
+ static void VCountIntr(void);
+@@ -140,16 +145,25 @@ void AgbMain()
+     *(vu16 *)BG_PLTT = RGB_WHITE;
+ #endif
+     InitGpuRegManager();
++    PORT_BOOT_STEP(0xA002);
+     REG_WAITCNT = WAITCNT_PREFETCH_ENABLE | WAITCNT_WS0_S_1 | WAITCNT_WS0_N_3;
+     InitKeys();
++    PORT_BOOT_STEP(0xA003);
+     InitIntrHandlers();
++    PORT_BOOT_STEP(0xA004);
+     m4aSoundInit();
++    PORT_BOOT_STEP(0xA005);
+     EnableVCountIntrAtLine150();
++    PORT_BOOT_STEP(0xA006);
++#ifndef PORTABLE
+     InitRFU();
+     CheckForFlashMemory();
++    PORT_BOOT_STEP(0xA008);
+     InitMainCallbacks();
++    PORT_BOOT_STEP(0xA009);
+     InitMapMusic();
+     ClearDma3Requests();
++    PORT_BOOT_STEP(0xA00C);
+     ResetBgs();
+     InitHeap(gHeap, HEAP_SIZE);
+     SetDefaultFontsPointer();
+@@ -177,7 +191,12 @@ void AgbMain()
+ 
+     for (;;)
+     {
++#ifdef PORT_BRIDGE
++        Port_RecordMainLoopIteration();
++#endif
++        PORT_BOOT_STEP(0xA020);
+         ReadKeys();
++        sMainCallback2JustChanged = FALSE;
+ 
+         if (gSoftResetDisabled == FALSE
+          && (gMain.heldKeysRaw & A_BUTTON)
+@@ -199,7 +218,9 @@ void AgbMain()
+         else
+         {
+             gLinkTransferringData = FALSE;
++            PORT_BOOT_STEP(0xA021);
+             UpdateLinkAndCallCallbacks();
++            PORT_BOOT_STEP(0xA022);
+ 
+             if (Overworld_RecvKeysFromLinkIsRunning() == 1)
+             {
+@@ -211,9 +232,23 @@ void AgbMain()
+             }
+         }
+ 
++        if (sMainCallback2JustChanged)
++        {
++#ifdef PORT_BRIDGE
++            Port_SetBirchDebugEx(0x0190,
++                                (u16)((uintptr_t)gMain.callback2 >> 16),
++                                (u16)(uintptr_t)gMain.callback2,
++                                gMain.state,
++                                0);
++#endif
++            continue;
++        }
++
+         PlayTimeCounter_Update();
+         MapMusicMain();
++        PORT_BOOT_STEP(0xA023);
+         WaitForVBlank();
++        PORT_BOOT_STEP(0xA024);
+     }
+ }
+ 
+@@ -252,6 +287,20 @@ static void CallCallbacks(void)
+ 
+ void SetMainCallback2(MainCallback callback)
+ {
++#ifdef PORT_BRIDGE
++    {
++        uintptr_t cb = (uintptr_t)callback;
++
++        if (cb != 0)
++        {
++            callback = (MainCallback)cb;
++        }
++
++        Port_SetBirchDebugEx(0x0182, (u16)(cb >> 16), (u16)cb, gMain.state, 0);
++        Port_SetAssetDebugEx(0x0301, (u16)(cb >> 16), (u16)cb, gMain.state, 0);
++    }
++#endif
++    sMainCallback2JustChanged = TRUE;
+     gMain.callback2 = callback;
+     gMain.state = 0;
+ }
+@@ -295,7 +344,11 @@ void InitKeys(void)
+ 
+ static void ReadKeys(void)
+ {
++#ifndef PORTABLE
+     u16 keyInput = REG_KEYINPUT ^ KEYS_MASK;
++#else
++    u16 keyInput = Platform_GetKeyInput();
++#endif
+     gMain.newKeysRaw = keyInput & ~gMain.heldKeysRaw;
+     gMain.newKeys = gMain.newKeysRaw;
+     gMain.newAndRepeatedKeys = gMain.newKeysRaw;
+@@ -347,6 +400,7 @@ void InitIntrHandlers(void)
+     DmaCopy32(3, intr_main, IntrMain_Buffer, sizeof(IntrMain_Buffer));
+ 
+     INTR_VECTOR = IntrMain_Buffer;
++#endif
+ 
+     SetVBlankCallback(NULL);
+     SetHBlankCallback(NULL);
+@@ -386,18 +440,55 @@ static void VBlankIntr(void)
+         RfuVSync();
+     else if (!gLinkVSyncDisabled)
+         LinkVSync();
++#ifdef PORT_BRIDGE
++    Port_ProfAcc("link");
++#endif
++
++#ifdef PORT_BRIDGE
++    Port_SetDmaDebugEx(0x0E01, gMain.vblankCounter1, gMain.state, 0, 0);
++#endif
+ 
+     if (gMain.vblankCounter1)
+         (*gMain.vblankCounter1)++;
+ 
++#ifdef PORT_BRIDGE
++    Port_SetDmaDebugEx(0x0E02, gMain.vblankCounter1, gMain.state, 0, 0);
++#endif
+     if (gMain.vblankCallback)
+         gMain.vblankCallback();
++#ifdef PORT_BRIDGE
++    Port_ProfAcc("callback");
++#endif
++
++#ifdef PORT_BRIDGE
++    Port_SetDmaDebugEx(0x0E03, gMain.vblankCounter1, gMain.state, 0, 0);
++#endif
+ 
+     gMain.vblankCounter2++;
+ 
+     CopyBufferedValuesToGpuRegs();
++#ifdef PORT_BRIDGE
++    Port_ProfAcc("gpuregs");
++#endif
++#ifdef PORT_BRIDGE
++    Port_SetDmaDebugEx(0x0E04, gMain.vblankCounter1, gMain.state, 0, 0);
++#endif
+     ProcessDma3Requests();
++#ifdef PORT_BRIDGE
++    Port_ProfAcc("dma3");
++#endif
++#ifdef PORT_BRIDGE
++    Port_SetDmaDebugEx(0x0E05, gMain.vblankCounter1, gMain.state, 0, 0);
++#endif
+ 
++#ifdef PORT_BRIDGE
++    // The port drives the GBA VBlank handler from VBlankIntrWait(), but
++    // does not currently synthesize the separate GBA VCount interrupt.
++    m4aSoundVSync();
++#endif
++#ifdef PORT_BRIDGE
++    Port_ProfAcc("m4aVSync");
++#endif
+     gPcmDmaCounter = gSoundInfo.pcmDmaCounter;
+ 
+ #if !defined(NDEBUG) || REVISION >= 0xA
+@@ -411,6 +502,12 @@ static void VBlankIntr(void)
+     TryReceiveLinkBattleData();
+     Random();
+     UpdateWirelessStatusIndicatorSprite();
++#ifdef PORT_BRIDGE
++    Port_ProfAcc("rest");
++#endif
++#ifdef PORT_BRIDGE
++    Port_SetDmaDebugEx(0x0E09, gMain.vblankCounter1, gMain.state, 0, 0);
++#endif
+ 
+     INTR_CHECK |= INTR_FLAG_VBLANK;
+     gMain.intrCheck |= INTR_FLAG_VBLANK;
+@@ -461,10 +558,14 @@ static void IntrDummy(void)
+ 
+ static void WaitForVBlank(void)
+ {
++#ifdef PORTABLE
++    VBlankIntrWait();
++#else
+     gMain.intrCheck &= ~INTR_FLAG_VBLANK;
+ 
+     while (!(gMain.intrCheck & INTR_FLAG_VBLANK))
+         ;
++#endif
+ }
+ 
+ void SetVBlankCounter1Ptr(u32 *ptr)
+diff --git a/src/main_menu.c b/src/main_menu.c
+index 5cef7c4..4c3986d 100644
+--- a/src/main_menu.c
++++ b/src/main_menu.c
+@@ -140,10 +140,35 @@ static const u8 sMenuCursorYMax[] = { 0, 1, 2 };
+ 
+ static void CB2_MainMenu(void)
+ {
++    MainCallback callback2 = gMain.callback2;
++
+     RunTasks();
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x00E2, 0, 0, 0, 0);
++#endif
++    if (gMain.callback2 != callback2)
++    {
++#ifdef PORT_BRIDGE
++        Port_SetBirchDebugEx(0x00E6,
++                            (u16)((uintptr_t)gMain.callback2 >> 16),
++                            (u16)(uintptr_t)gMain.callback2,
++                            0,
++                            0);
++#endif
++        return;
++    }
+     AnimateSprites();
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x00E3, 0, 0, 0, 0);
++#endif
+     BuildOamBuffer();
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x00E4, 0, 0, 0, 0);
++#endif
+     UpdatePaletteFade();
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x00E5, 0, 0, 0, 0);
++#endif
+ }
+ 
+ static void VBlankCB_MainMenu(void)
+diff --git a/src/malloc.c b/src/malloc.c
+index 260c41d..f4d6610 100644
+--- a/src/malloc.c
++++ b/src/malloc.c
+@@ -214,6 +214,13 @@ bool32 CheckHeap()
+ {
+     struct MemBlock *pos = (struct MemBlock *)sHeapStart;
+ 
++#if defined(PORT_BRIDGE) && !defined(PORT_HEAP_CHECK)
++    // The port only feeds this to debug traces, many of them on per-tile and
++    // per-frame paths (every map lookup used to walk the whole heap). Build
++    // with -DPORT_HEAP_CHECK to get the walk back when chasing corruption.
++    return TRUE;
++#endif
++
+     do {
+         if (!CheckMemBlockInternal(sHeapStart, pos->data))
+             return FALSE;
+@@ -222,3 +229,21 @@ bool32 CheckHeap()
+ 
+     return TRUE;
+ }
++
++#ifdef PORT_BRIDGE
++// Called between game callbacks by the port's resource cache collector. Freed blocks
++// must not keep old script/text/graphics pointers alive indefinitely.
++void Port_VisitGameHeap(void (*visit)(const void *, u32))
++{
++    struct MemBlock *pos = sHeapStart;
++
++    if (pos == NULL)
++        return;
++    do
++    {
++        if (pos->flag)
++            visit(pos->data, pos->size);
++        pos = pos->next;
++    } while (pos != sHeapStart);
++}
++#endif
+diff --git a/src/math_util.c b/src/math_util.c
+index 767e4d9..74c6d39 100644
+--- a/src/math_util.c
++++ b/src/math_util.c
+@@ -23,7 +23,7 @@ s16 Q_N_S_mul(u8 s, s16 x, s16 y)
+ 
+ s32 Q_24_8_mul(s32 x, s32 y)
+ {
+-    s64 result;
++    u32 result;
+ 
+     result = x;
+     result *= y;
+@@ -51,7 +51,7 @@ s16 Q_N_S_div(u8 s, s16 x, s16 y)
+ 
+ s32 Q_24_8_div(s32 x, s32 y)
+ {
+-    s64 _x;
++    u32 _x;
+ 
+     if (y == 0)
+     {
+@@ -80,7 +80,7 @@ s16 Q_N_S_inv(u8 s, s16 y)
+ 
+ s32 Q_24_8_inv(s32 y)
+ {
+-    s64 x;
++    u32 x;
+ 
+     x = 0x10000;
+     return x / y;
+diff --git a/src/menu.c b/src/menu.c
+index 9ee9968..9bc8454 100644
+--- a/src/menu.c
++++ b/src/menu.c
+@@ -343,8 +343,14 @@ s8 Menu_ProcessInput(void)
+ {
+     if (JOY_NEW(A_BUTTON))
+     {
++#ifdef PORT_BRIDGE
++        Port_SetBirchDebugEx(0x7220, sMenu.cursorPos, gMain.newKeys, gMain.heldKeys, 0);
++#endif
+         if (!sMenu.APressMuted)
+             PlaySE(SE_SELECT);
++#ifdef PORT_BRIDGE
++        Port_SetBirchDebugEx(0x7221, sMenu.cursorPos, gMain.newKeys, gMain.heldKeys, 0);
++#endif
+         return sMenu.cursorPos;
+     }
+     if (JOY_NEW(B_BUTTON))
+@@ -571,6 +577,9 @@ void DestroyYesNoMenu(void)
+     if (sYesNoWindowId == 0xFF) return;
+ #endif
+     ClearStdWindowAndFrameToTransparent(sYesNoWindowId, TRUE);
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x7212, sYesNoWindowId, 0, 0, 0);
++#endif
+     RemoveWindow(sYesNoWindowId);
+ #if REVISION >= 0xA
+     sYesNoWindowId = 0xFF;
+diff --git a/src/menu_helpers.c b/src/menu_helpers.c
+index 584e94e..9c02a82 100644
+--- a/src/menu_helpers.c
++++ b/src/menu_helpers.c
+@@ -46,7 +46,11 @@ static void Task_ContinueTaskAfterMessagePrints(u8 taskId)
+ 
+ static void Task_CallYesOrNoCallback(u8 taskId)
+ {
++#ifdef PLATFORM_3DS
++    switch (CtrMenu_YesNoInput())
++#else
+     switch (Menu_ProcessInputNoWrapClearOnChoose())
++#endif
+     {
+     case 0:
+         PlaySE(SE_SELECT);
+diff --git a/src/mon_markings.c b/src/mon_markings.c
+index 1500be9..1ea1940 100644
+--- a/src/mon_markings.c
++++ b/src/mon_markings.c
+@@ -378,10 +378,30 @@ void FreeMonMarkingsMenu(void)
+         DestroySprite(sMenu->textSprite);
+ }
+ 
+-bool8 HandleMonMarkingsMenuInput(void)
++// A on the row under the cursor: a marking toggles, OK and CANCEL close the menu.
++static bool8 ChooseMonMarking(void)
+ {
+     u16 i;
+ 
++    PlaySE(SE_SELECT);
++
++    switch (sMenu->cursorPos)
++    {
++    case SELECTION_OK:
++        sMenu->markings = 0;
++        for (i = 0; i < NUM_MON_MARKINGS; i++)
++            sMenu->markings |= sMenu->markingsArray[i] << i;
++        return FALSE;
++    case SELECTION_CANCEL:
++        return FALSE;
++    }
++
++    sMenu->markingsArray[sMenu->cursorPos] = !sMenu->markingsArray[sMenu->cursorPos];
++    return TRUE;
++}
++
++bool8 HandleMonMarkingsMenuInput(void)
++{
+     if (JOY_NEW(DPAD_UP))
+     {
+         PlaySE(SE_SELECT);
+@@ -399,23 +419,7 @@ bool8 HandleMonMarkingsMenuInput(void)
+     }
+ 
+     if (JOY_NEW(A_BUTTON))
+-    {
+-        PlaySE(SE_SELECT);
+-
+-        switch (sMenu->cursorPos)
+-        {
+-        case SELECTION_OK:
+-            sMenu->markings = 0;
+-            for (i = 0; i < NUM_MON_MARKINGS; i++)
+-                sMenu->markings |= sMenu->markingsArray[i] << i;
+-            return FALSE;
+-        case SELECTION_CANCEL:
+-            return FALSE;
+-        }
+-
+-        sMenu->markingsArray[sMenu->cursorPos] = !sMenu->markingsArray[sMenu->cursorPos];
+-        return TRUE;
+-    }
++        return ChooseMonMarking();
+ 
+     if (JOY_NEW(B_BUTTON))
+     {
+diff --git a/src/multiboot.c b/src/multiboot.c
+index b44c421..2cdf538 100644
+--- a/src/multiboot.c
++++ b/src/multiboot.c
+@@ -1,7 +1,9 @@
+ #include "global.h"
+ #include "multiboot.h"
++#include "gba/io_reg.h"
+ 
+ static u16 MultiBoot_required_data[MULTIBOOT_NCHILD];
++#ifndef PORTABLE
+ 
+ static int MultiBootSend(struct MultiBootParam *mp, u16 data);
+ static int MultiBootHandShake(struct MultiBootParam *mp);
+@@ -414,3 +416,4 @@ static void MultiBootWaitSendDone(void)
+     for (i = 0; (i < 31069) && (REG_SIOCNT & SIO_START); i++);
+     MultiBootWaitCycles(600);
+ }
++#endif
+diff --git a/src/naming_screen.c b/src/naming_screen.c
+index deef705..6272fcf 100644
+--- a/src/naming_screen.c
++++ b/src/naming_screen.c
+@@ -718,10 +718,17 @@ static bool8 MainState_Exit(void)
+ {
+     if (!gPaletteFade.active)
+     {
++#ifndef PORTABLE // See note on TID generation in InitPlayerTrainerId in new_game.c
+         if (sNamingScreen->templateNum == NAMING_SCREEN_PLAYER)
+             SeedRngAndSetTrainerId();
++#endif
+         SetMainCallback2(sNamingScreen->returnCallback);
+         DestroyTask(FindTaskIdByFunc(Task_NamingScreen));
++#ifdef PORTABLE
++        ResetVHBlank();
++        // Fix use-after-free issues with gNamingScreenData caused by sprites calling their callbacks which attempt to read from gNamingScreenData.
++        ResetSpriteData();
++#endif
+         FreeAllWindowBuffers();
+         FREE_AND_SET_NULL(sNamingScreen);
+         RestoreHelpContext();
+diff --git a/src/new_game.c b/src/new_game.c
+index 3768b3c..0a8598d 100644
+--- a/src/new_game.c
++++ b/src/new_game.c
+@@ -48,12 +48,20 @@ void CopyTrainerId(u8 *dst, u8 *src)
+ {
+     s32 i;
+     for (i = 0; i < 4; i++)
++#ifdef PORTABLE
++        dst[i] = src != NULL ? src[i] : 0;
++#else
+         dst[i] = src[i];
++#endif
+ }
+ 
+ static void InitPlayerTrainerId(void)
+ {
++#ifndef PORTABLE
+     u32 trainerId = (Random() << 0x10) | GetGeneratedTrainerIdLower();
++#else // the lower half comes from a hardware timer on the GBA
++    u32 trainerId = (Random() << 0x10) | Random();
++#endif
+     SetTrainerId(trainerId, gSaveBlock2Ptr->playerTrainerId);
+ }
+ 
+diff --git a/src/overworld.c b/src/overworld.c
+index 339014d..52695d3 100644
+--- a/src/overworld.c
++++ b/src/overworld.c
+@@ -27,6 +27,7 @@
+ #include "map_name_popup.h"
+ #include "map_preview_screen.h"
+ #include "metatile_behavior.h"
++#include "malloc.h"
+ #include "money.h"
+ #include "new_game.h"
+ #include "new_menu_helpers.h"
+@@ -83,6 +84,15 @@ struct InitialPlayerAvatarState
+     bool8 hasDirectionSet;
+ };
+ 
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
++#ifdef PORT_BRIDGE
++#define PORT_PROF(label) Port_ProfileMark(label)
++#else
++#define PORT_PROF(label) ((void)0)
++#endif
++
+ struct CableClubPlayer
+ {
+     u8 playerId;
+@@ -1308,24 +1318,39 @@ static const struct BgTemplate sOverworldBgTemplates[] = {
+     }, {
+         .bg = 1,
+         .charBaseIndex = 0,
++#ifdef PORT_BRIDGE
++        .mapBaseIndex = 25,
++        .screenSize = 1,
++#else
+         .mapBaseIndex = 29,
+         .screenSize = 0,
++#endif
+         .paletteMode = 0,
+         .priority = 1,
+         .baseTile = 0x000
+     }, {
+         .bg = 2,
+         .charBaseIndex = 0,
++#ifdef PORT_BRIDGE
++        .mapBaseIndex = 27,
++        .screenSize = 1,
++#else
+         .mapBaseIndex = 28,
+         .screenSize = 0,
++#endif
+         .paletteMode = 0,
+         .priority = 2,
+         .baseTile = 0x000
+     }, {
+         .bg = 3,
+         .charBaseIndex = 0,
++#ifdef PORT_BRIDGE
++        .mapBaseIndex = 29,
++        .screenSize = 1,
++#else
+         .mapBaseIndex = 30,
+         .screenSize = 0,
++#endif
+         .paletteMode = 0,
+         .priority = 3,
+         .baseTile = 0x000
+@@ -1628,6 +1653,14 @@ static void CB2_ReturnToFieldLocal(void)
+         SetFieldVBlankCallback();
+         SetMainCallback2(CB2_Overworld);
+     }
++
++#ifdef PORT_BRIDGE
++    Port_SetAssetDebugEx(0x0323,
++                        gSaveBlock1Ptr->location.warpId & 0xFF,
++                        gSaveBlock1Ptr->pos.x,
++                        gSaveBlock1Ptr->pos.y,
++                        CheckHeap());
++#endif
+ }
+ 
+ static void CB2_ReturnToFieldLink(void)
+@@ -1960,6 +1993,13 @@ static bool32 ReturnToFieldLocal(u8 *state)
+     case 4:
+         return TRUE;
+     }
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x021D,
++                        gSaveBlock1Ptr->pos.x + MAP_OFFSET,
++                        gSaveBlock1Ptr->pos.y + MAP_OFFSET,
++                        gSaveBlock1Ptr->mapLayoutId,
++                        CheckHeap());
++#endif
+     return FALSE;
+ }
+ 
+@@ -2424,6 +2464,9 @@ static bool32 SetUpScrollSceneForCredits(u8 *state, u8 unused)
+     }
+     return FALSE;
+ }
++#ifdef PLATFORM_3DS
++    FieldCamera_UnregisterTileBanks();
++#endif
+ 
+ static bool8 MapLdr_Credits(void)
+ {
+@@ -2538,6 +2581,13 @@ static void Task_OvwldCredits_FadeOut(u8 taskId)
+ static void Task_OvwldCredits_WaitFade(u8 taskId)
+ {
+     if (!gPaletteFade.active)
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0100,
++                        gSaveBlock1Ptr->location.mapGroup | (gSaveBlock1Ptr->location.mapNum << 8),
++                        gSaveBlock1Ptr->mapLayoutId,
++                        gMain.state,
++                        CheckHeap());
++#endif
+     {
+         CleanupOverworldWindowsAndTilemaps();
+         SetMainCallback2(CB2_LoadMap);
+@@ -2895,6 +2945,13 @@ static u16 KeyInterCB_DeferToRecvQueue(u32 key)
+     {
+         retVal = LINK_KEY_CODE_EMPTY;
+     }
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0200 | *state,
++                        *state,
++                        gSaveBlock1Ptr->location.mapGroup | (gSaveBlock1Ptr->location.mapNum << 8),
++                        gSaveBlock1Ptr->mapLayoutId,
++                        a2);
++#endif
+     else
+     {
+         retVal = LINK_KEY_CODE_IDLE;
+@@ -3079,6 +3136,11 @@ static bool32 PlayerIsAtSouthExit(struct CableClubPlayer *player)
+     else if (!MetatileBehavior_IsSouthArrowWarp(player->metatileBehavior))
+         return FALSE;
+     else if (player->facing != DIR_SOUTH)
++#ifdef PORT_BRIDGE
++    // MoveSaveBlocks drains DMA before destroying gHeap. Forget its old
++    // allocations before ResumeMap scripts can enqueue or free tile buffers.
++    ResetTempTileDataBuffers();
++#endif
+         return FALSE;
+     else
+         return TRUE;
+diff --git a/src/palette.c b/src/palette.c
+index 84f2342..61249d5 100644
+--- a/src/palette.c
++++ b/src/palette.c
+@@ -87,8 +87,86 @@ void LoadCompressedPalette(const u32 *src, u16 offset, u16 size)
+ 
+ void LoadPalette(const void *src, u16 offset, u16 size)
+ {
+-    CpuCopy16(src, &gPlttBufferUnfaded[offset], size);
+-    CpuCopy16(src, &gPlttBufferFaded[offset], size);
++#ifdef PORT_BRIDGE
++    // Unsized INCBIN_U16 arrays contain one placeholder, not the palette.
++    // Explicit one-color asset reads must use LoadPaletteWithOffset instead.
++    if (size == sizeof(u16))
++    {
++        u32 assetSize = Port_GetAssetSizeExact(src);
++
++        if (assetSize > size && assetSize <= PLTT_SIZE && assetSize % sizeof(u16) == 0)
++            size = assetSize;
++    }
++#endif
++    LoadPaletteWithOffset(src, 0, offset, size);
++}
++
++void LoadPaletteWithOffset(const void *base, u32 byteOffset, u16 dest, u16 size)
++{
++    const void *src;
++
++#ifdef PORT_BRIDGE
++    u16 assetColors[PLTT_BUFFER_SIZE];
++    u32 assetSize = Port_GetAssetSizeExact(base);
++    u16 end = PLTT_BUFFER_SIZE;
++
++#ifdef PLATFORM_3DS
++    // The ext palettes take loads of their own, never one spilling over.
++    if (dest >= PLTT_EXT_OFFSET)
++        end = PLTT_BUFFER_ALLOC;
++#endif
++    // Asset size is not the size of this palette update (it may be a subrange).
++    if (dest >= end)
++        return;
++    if (size > (end - dest) * sizeof(u16))
++        size = (end - dest) * sizeof(u16);
++    if (assetSize != 0)
++    {
++        // A copy longer than the asset read past it into the next INCBIN on
++        // the GBA (the region map loads 3 banks from a 2-bank palette). Only
++        // the asset's own colors are meaningful; the rest stays untouched.
++        if (byteOffset >= assetSize)
++            return;
++        if (size > assetSize - byteOffset)
++            size = assetSize - byteOffset;
++        // Palettes are copied, not retained. Do not consume the persistent
++        // asset cache or fall back to reading a stub when allocation/I/O fails.
++        if (!Port_LoadAssetRangeToBuffer(base, byteOffset, assetColors, size))
++            return;
++        base = assetColors;
++        byteOffset = 0;
++    }
++    else
++    {
++        base = Port_ResolveAssetPointerSized(base, byteOffset + size);
++    }
++#endif
++    src = (const u8 *)base + byteOffset;
++    CpuCopy16(src, &gPlttBufferUnfaded[dest], size);
++    CpuCopy16(src, &gPlttBufferFaded[dest], size);
++}
++
++void LoadPaletteFadedWithOffset(const void *base, u32 byteOffset, u16 dest, u16 size)
++{
++#ifdef PORT_BRIDGE
++    u32 assetSize = Port_GetAssetSizeExact(base);
++
++    if (base == NULL || dest >= PLTT_BUFFER_SIZE)
++        return;
++    if (size > (PLTT_BUFFER_SIZE - dest) * sizeof(u16))
++        size = (PLTT_BUFFER_SIZE - dest) * sizeof(u16);
++    if (assetSize != 0)
++    {
++        if (byteOffset > assetSize || size > assetSize - byteOffset)
++            return;
++        // Color ramps are reused every frame. Resolve their base once into
++        // the asset cache, never the address of an indexed placeholder.
++        base = Port_ResolveAssetPointerSized(base, byteOffset + size);
++        if (Port_IsAssetStub(base))
++            return;
++    }
++#endif
++    CpuCopy16((const u8 *)base + byteOffset, &gPlttBufferFaded[dest], size);
+ }
+ 
+ void FillPalette(u16 value, u16 offset, u16 size)
+@@ -97,6 +175,35 @@ void FillPalette(u16 value, u16 offset, u16 size)
+     CpuFill16(value, &gPlttBufferFaded[offset], size);
+ }
+ 
++#ifdef PLATFORM_3DS
++/*
++ * The ext palettes (include/palette.h) reach the renderers whenever the
++ * buffer reaches PLTT, so a frame never shows them a step out of a fade: while
++ * any is in use, and once more as the last one is freed, which tells the
++ * renderers to stop looking at them.
++ */
++static void TransferPlttBufferExt(void)
++{
++    static u16 sLatched;
++
++    if (gPlttExtInUse | sLatched)
++    {
++        CtrVideo_LatchExtPalettes(&gPlttBufferFaded[PLTT_EXT_OFFSET], gPlttExtInUse);
++        sLatched = gPlttExtInUse;
++    }
++}
++
++// The ext palettes in `palettes` blended as BlendPalette blends a palette.
++static void BlendExtPalettes(u32 palettes, u8 coeff, u16 color)
++{
++    u16 paletteOffset;
++
++    for (paletteOffset = PLTT_EXT_OFFSET; palettes; paletteOffset += 16, palettes >>= 1)
++        if (palettes & 1)
++            BlendPalette(paletteOffset, 16, coeff, color);
++}
++#endif
++
+ void TransferPlttBuffer(void)
+ {
+     if (!gPaletteFade.bufferTransferDisabled)
+@@ -104,6 +211,9 @@ void TransferPlttBuffer(void)
+         void *src = gPlttBufferFaded;
+         void *dest = (void *)PLTT;
+         DmaCopy16(3, src, dest, PLTT_SIZE);
++#ifdef PLATFORM_3DS
++        TransferPlttBufferExt();
++#endif
+         sPlttBufferTransferPending = FALSE;
+         if (gPaletteFade.mode == HARDWARE_FADE && gPaletteFade.active)
+             UpdateBlendRegisters();
+@@ -116,7 +226,15 @@ u8 UpdatePaletteFade(void)
+     u8 dummy = 0;
+ 
+     if (sPlttBufferTransferPending)
++    {
++#ifdef PORT_BRIDGE
++        TransferPlttBuffer();
++        sPlttBufferTransferPending = FALSE;
++#else
+         return PALETTE_FADE_STATUS_LOADING;
++#endif
++    }
++
+     if (gPaletteFade.mode == NORMAL_FADE)
+         result = UpdateNormalPaletteFade();
+     else if (gPaletteFade.mode == FAST_FADE)
+@@ -181,6 +299,9 @@ bool8 BeginNormalPaletteFade(u32 selectedPalettes, s8 delay, u8 startY, u8 targe
+         temp = gPaletteFade.bufferTransferDisabled;
+         gPaletteFade.bufferTransferDisabled = FALSE;
+         CpuCopy32(gPlttBufferFaded, (void *)PLTT, PLTT_SIZE);
++#ifdef PLATFORM_3DS
++        TransferPlttBufferExt();
++#endif
+         sPlttBufferTransferPending = FALSE;
+         if (gPaletteFade.mode == HARDWARE_FADE && gPaletteFade.active)
+             UpdateBlendRegisters();
+@@ -421,6 +542,10 @@ static u8 UpdateNormalPaletteFade(void)
+         {
+             selectedPalettes = gPaletteFade_selectedPalettes >> 16;
+             paletteOffset = OBJ_PLTT_OFFSET;
++#ifdef PLATFORM_3DS
++            BlendExtPalettes(PLTT_EXT_SELECTED(gPaletteFade_selectedPalettes),
++                             gPaletteFade.y, gPaletteFade.blendColor);
++#endif
+         }
+         while (selectedPalettes)
+         {
+@@ -471,6 +596,9 @@ static u8 UpdateNormalPaletteFade(void)
+ void InvertPlttBuffer(u32 selectedPalettes)
+ {
+     u16 paletteOffset = 0;
++#ifdef PLATFORM_3DS
++    u32 ext = PLTT_EXT_SELECTED(selectedPalettes);
++#endif
+ 
+     while (selectedPalettes)
+     {
+@@ -484,11 +612,24 @@ void InvertPlttBuffer(u32 selectedPalettes)
+         selectedPalettes >>= 1;
+         paletteOffset += 16;
+     }
++#ifdef PLATFORM_3DS
++    for (paletteOffset = PLTT_EXT_OFFSET; ext; paletteOffset += 16, ext >>= 1)
++    {
++        u8 i;
++
++        if (ext & 1)
++            for (i = 0; i < 16; i++)
++                gPlttBufferFaded[paletteOffset + i] = ~gPlttBufferFaded[paletteOffset + i];
++    }
++#endif
+ }
+ 
+ void TintPlttBuffer(u32 selectedPalettes, s8 r, s8 g, s8 b)
+ {
+     u16 paletteOffset = 0;
++#ifdef PLATFORM_3DS
++    u32 ext = PLTT_EXT_SELECTED(selectedPalettes);
++#endif
+ 
+     while (selectedPalettes)
+     {
+@@ -508,11 +649,29 @@ void TintPlttBuffer(u32 selectedPalettes, s8 r, s8 g, s8 b)
+         selectedPalettes >>= 1;
+         paletteOffset += 16;
+     }
++#ifdef PLATFORM_3DS
++    for (paletteOffset = PLTT_EXT_OFFSET; ext; paletteOffset += 16, ext >>= 1)
++    {
++        u8 i;
++
++        if (ext & 1)
++            for (i = 0; i < 16; i++)
++            {
++                struct PlttData *data = (struct PlttData *)&gPlttBufferFaded[paletteOffset + i];
++                data->r += r;
++                data->g += g;
++                data->b += b;
++            }
++    }
++#endif
+ }
+ 
+ void UnfadePlttBuffer(u32 selectedPalettes)
+ {
+     u16 paletteOffset = 0;
++#ifdef PLATFORM_3DS
++    u32 ext = PLTT_EXT_SELECTED(selectedPalettes);
++#endif
+ 
+     while (selectedPalettes)
+     {
+@@ -526,6 +685,11 @@ void UnfadePlttBuffer(u32 selectedPalettes)
+         selectedPalettes >>= 1;
+         paletteOffset += 16;
+     }
++#ifdef PLATFORM_3DS
++    for (paletteOffset = PLTT_EXT_OFFSET; ext; paletteOffset += 16, ext >>= 1)
++        if (ext & 1)
++            CpuCopy16(&gPlttBufferUnfaded[paletteOffset], &gPlttBufferFaded[paletteOffset], PLTT_SIZE_4BPP);
++#endif
+ }
+ 
+ void BeginFastPaletteFade(u8 submode)
+@@ -560,7 +724,8 @@ static u8 UpdateFastPaletteFade(void)
+     if (gPaletteFade.objPaletteToggle)
+     {
+         paletteOffsetStart = OBJ_PLTT_OFFSET;
+-        paletteOffsetEnd = PLTT_BUFFER_SIZE;
++        // With the ext palettes, which follow the OBJ palettes.
++        paletteOffsetEnd = PLTT_BUFFER_BYTES / sizeof(u16);
+     }
+     else
+     {
+@@ -664,13 +829,13 @@ static u8 UpdateFastPaletteFade(void)
+         {
+         case FAST_FADE_IN_FROM_WHITE:
+         case FAST_FADE_IN_FROM_BLACK:
+-            CpuCopy32(gPlttBufferUnfaded, gPlttBufferFaded, PLTT_SIZE);
++            CpuCopy32(gPlttBufferUnfaded, gPlttBufferFaded, PLTT_BUFFER_BYTES);
+             break;
+         case FAST_FADE_OUT_TO_WHITE:
+-            CpuFill32(0xFFFFFFFF, gPlttBufferFaded, PLTT_SIZE);
++            CpuFill32(0xFFFFFFFF, gPlttBufferFaded, PLTT_BUFFER_BYTES);
+             break;
+         case FAST_FADE_OUT_TO_BLACK:
+-            CpuFill32(0x00000000, gPlttBufferFaded, PLTT_SIZE);
++            CpuFill32(0x00000000, gPlttBufferFaded, PLTT_BUFFER_BYTES);
+             break;
+         }
+         gPaletteFade.mode = NORMAL_FADE;
+@@ -780,6 +945,9 @@ void BlendPalettes(u32 selectedPalettes, u8 coeff, u16 color)
+ {
+     u16 paletteOffset;
+ 
++#ifdef PLATFORM_3DS
++    BlendExtPalettes(PLTT_EXT_SELECTED(selectedPalettes), coeff, color);
++#endif
+     for (paletteOffset = 0; selectedPalettes; paletteOffset += 16)
+     {
+         if (selectedPalettes & 1)
+@@ -913,7 +1081,7 @@ void BlendPalettesGradually(u32 selectedPalettes, s8 delay, u8 coeff, u8 coeffTa
+ {
+     u8 taskId;
+ 
+-    taskId = CreateTask(Task_BlendPalettesGradually, priority);
++    taskId = CreateTask((void *)Task_BlendPalettesGradually, priority);
+     gTasks[taskId].tCoeff = coeff;
+     gTasks[taskId].tCoeffTarget = coeffTarget;
+     if (delay >= 0)
+diff --git a/src/platform/bios.c b/src/platform/bios.c
+index cab352c..eadfe8c 100644
+--- a/src/platform/bios.c
++++ b/src/platform/bios.c
+@@ -254,8 +254,9 @@ void CpuFastSet(const void *src, void *dst, u32 cnt)
+     }
+ }
+ 
+-void LZ77UnCompVram(const u32 *src_, void *dest_)
++void LZ77UnCompVram(const void *src__in, void *dest_)
+ {
++    const u32 *src_ = src__in;
+     int destSize = 0;
+ #ifdef PORT_BRIDGE
+     u8 *assetBuf = NULL;
+@@ -334,8 +335,9 @@ fail:
+ #endif
+ }
+ 
+-void LZ77UnCompWram(const u32 *src, void *dst)
++void LZ77UnCompWram(const void *src_in, void *dst)
+ {
++    const u32 *src = src_in;
+ #ifdef PORT_BRIDGE
+     u8 *assetBuf = NULL;
+     u32 assetSize = 0;
+@@ -388,8 +390,9 @@ void LZ77UnCompWram(const u32 *src, void *dst)
+ #endif
+ }
+ 
+-void RLUnCompWram(const u32 *src, void *dest)
++void RLUnCompWram(const void *src_in, void *dest)
+ {
++    const u32 *src = src_in;
+     int remaining = CPUReadMemory(src) >> 8;
+     int padding = (4 - remaining) & 0x3;
+     int blockHeader;
+@@ -432,8 +435,9 @@ void RLUnCompWram(const u32 *src, void *dest)
+     }
+ }
+ 
+-void RLUnCompVram(const u32 *src, void *dest)
++void RLUnCompVram(const void *src_in, void *dest)
+ {
++    const u32 *src = src_in;
+     int remaining = CPUReadMemory(src) >> 8;
+     int padding = (4 - remaining) & 0x3;
+     int blockHeader;
+diff --git a/src/pokeball.c b/src/pokeball.c
+index a77401d..ce05531 100644
+--- a/src/pokeball.c
++++ b/src/pokeball.c
+@@ -683,6 +683,9 @@ static void Task_PlayCryWhenReleasedFromBall(u8 taskId)
+     s8 pan = gTasks[taskId].tCryTaskPan;
+     u16 species = gTasks[taskId].tCryTaskSpecies;
+     struct Pokemon *mon = (void *)(u32)((gTasks[taskId].tCryTaskMonPtr1 << 16) | (u16)(gTasks[taskId].tCryTaskMonPtr2));
++#else
++    struct Pokemon *mon = (void *)(u32)(((u16)gTasks[taskId].tCryTaskMonPtr1 << 16) | (u16)(gTasks[taskId].tCryTaskMonPtr2));
++#endif
+ 
+     switch (gTasks[taskId].tCryTaskState)
+     {
+@@ -1028,6 +1031,10 @@ void CreatePokeballSpriteToReleaseMon(u8 monSpriteId, u8 monPalNum, u8 x, u8 y,
+ {
+     u8 spriteId;
+ 
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebug(0x0009, monSpriteId, species, monPalNum);
++#endif
++
+     LoadCompressedSpriteSheetUsingHeap(&gBallSpriteSheets[BALL_POKE]);
+     LoadCompressedSpritePaletteUsingHeap(&gBallSpritePalettes[BALL_POKE]);
+     spriteId = CreateSprite(&gBallSpriteTemplates[BALL_POKE], x, y, subpriortiy);
+@@ -1039,6 +1046,10 @@ void CreatePokeballSpriteToReleaseMon(u8 monSpriteId, u8 monPalNum, u8 x, u8 y,
+     gSprites[monSpriteId].x = x;
+     gSprites[monSpriteId].y = y;
+ 
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebug(0x000A, monSpriteId, gSprites[monSpriteId].sSpecies, gSprites[monSpriteId].oam.tileNum);
++#endif
++
+     gSprites[spriteId].sDelay = delay;
+     gSprites[spriteId].sMonPalNum = monPalNum;
+     gSprites[spriteId].sFadePalsLo = fadePalettes;
+diff --git a/src/pokemon.c b/src/pokemon.c
+index 66a5c3d..723db0d 100644
+--- a/src/pokemon.c
++++ b/src/pokemon.c
+@@ -36,6 +36,9 @@
+ #include "constants/hold_effects.h"
+ #include "constants/battle_move_effects.h"
+ #include "constants/union_room.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define SPECIES_TO_HOENN(name)      [SPECIES_##name - 1] = HOENN_DEX_##name
+ #define SPECIES_TO_NATIONAL(name)   [SPECIES_##name - 1] = NATIONAL_DEX_##name
+diff --git a/src/pokemon_icon.c b/src/pokemon_icon.c
+index 037b1bf..45bbb73 100644
+--- a/src/pokemon_icon.c
++++ b/src/pokemon_icon.c
+@@ -1224,6 +1224,17 @@ u8 UpdateMonIconFrame(struct Sprite *sprite)
+             sprite->animCmdIndex = 0;
+             break;
+         default:
++#ifdef PORT_BRIDGE
++        {
++            // The icon is an INCBIN's stub: its second frame is read from the
++            // loaded asset, not from whatever lies after the stub.
++            u32 size = sSpriteImageSizes[sprite->oam.shape][sprite->oam.size];
++            const u8 *src = Port_ResolveSpriteFramePointer(sprite->images, size, size * frame);
++
++            if (src != NULL)
++                RequestSpriteCopy(src, (u8 *)(OBJ_VRAM0 + sprite->oam.tileNum * TILE_SIZE_4BPP), size);
++        }
++#else
+             RequestSpriteCopy(
+                 // pointer arithmetic is needed to get the correct pointer to perform the sprite copy on.
+                 // because sprite->images is a struct def, it has to be casted to (u8 *) before any
+@@ -1231,6 +1242,7 @@ u8 UpdateMonIconFrame(struct Sprite *sprite)
+                 (u8 *)sprite->images + (sSpriteImageSizes[sprite->oam.shape][sprite->oam.size] * frame),
+                 (u8 *)(OBJ_VRAM0 + sprite->oam.tileNum * TILE_SIZE_4BPP),
+                 sSpriteImageSizes[sprite->oam.shape][sprite->oam.size]);
++#endif
+             sprite->animDelayCounter = sprite->anims[sprite->animNum][sprite->animCmdIndex].frame.duration & 0xFF;
+             sprite->animCmdIndex++;
+             result = sprite->animCmdIndex;
+diff --git a/src/pokemon_size_record.c b/src/pokemon_size_record.c
+index e41c296..93b7f15 100644
+--- a/src/pokemon_size_record.c
++++ b/src/pokemon_size_record.c
+@@ -73,9 +73,15 @@ static u8 TranslateBigMonSizeTableIndex(u16 a)
+ 
+ static u32 GetMonSize(u16 species, u16 b)
+ {
++#ifndef PORTABLE
+     u64 unk2;
+     u64 unk4;
+     u64 unk0;
++#else
++    u32 unk2;
++    u32 unk4;
++    u32 unk0;
++#endif
+     u32 height;
+     u32 var;
+ 
+diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
+index b3e3c77..722d44a 100644
+--- a/src/pokemon_summary_screen.c
++++ b/src/pokemon_summary_screen.c
+@@ -2676,6 +2676,8 @@ static void PokeSum_PrintTrainerMemo_Mon_HeldByOT(void)
+             else
+                 DynamicPlaceholderTextUtil_ExpandPlaceholders(natureMetOrHatchedAtLevelStr, gText_PokeSum_Met);
+         }
++#undef CTR_A
++#undef CTR_B
+     }
+ 
+     AddTextPrinterParameterized4(sMonSummaryScreen->windowIds[POKESUM_WIN_TRAINER_MEMO], FONT_NORMAL, 0, 3, 0, 0, sLevelNickTextColors[0], TEXT_SKIP_DRAW, natureMetOrHatchedAtLevelStr);
+@@ -2773,6 +2775,8 @@ static void PokeSum_PrintTrainerMemo_Mon_NotHeldByOT(void)
+             else
+                 DynamicPlaceholderTextUtil_ExpandPlaceholders(natureMetOrHatchedAtLevelStr, gText_PokeSum_ApparentlyMet);
+         }
++#undef CTR_A
++#undef CTR_B
+     }
+ 
+     AddTextPrinterParameterized4(sMonSummaryScreen->windowIds[POKESUM_WIN_TRAINER_MEMO], FONT_NORMAL, 0, 3, 0, 0, sLevelNickTextColors[0], TEXT_SKIP_DRAW, natureMetOrHatchedAtLevelStr);
+diff --git a/src/save.c b/src/save.c
+index 36b960f..c067276 100644
+--- a/src/save.c
++++ b/src/save.c
+@@ -430,7 +430,8 @@ static u8 TryLoadSaveSlot(u16 sectorId, const struct SaveSectorLocation *locatio
+     else
+     {
+         status = GetSaveValidStatus(locations);
+-        CopySaveSlotData(FULL_SAVE_SLOT, locations);
++        if (status == SAVE_STATUS_OK || status == SAVE_STATUS_ERROR)
++            CopySaveSlotData(FULL_SAVE_SLOT, locations);
+     }
+ 
+     return status;
+diff --git a/src/scanline_effect.c b/src/scanline_effect.c
+index 7b50649..f60be75 100644
+--- a/src/scanline_effect.c
++++ b/src/scanline_effect.c
+@@ -90,6 +90,10 @@ void ScanlineEffect_InitHBlankDmaTransfer(void)
+     }
+     else
+     {
++#ifdef PORT_BRIDGE
++        gScanlineEffect.setFirstScanlineReg();
++        gScanlineEffect.srcBuffer ^= 1;
++#else
+         DmaStop(0);
+         // Set DMA to copy to dest register on each HBlank for the next frame.
+         // The HBlank DMA transfers do not occurr during VBlank, so the transfer
+@@ -99,6 +103,7 @@ void ScanlineEffect_InitHBlankDmaTransfer(void)
+         gScanlineEffect.setFirstScanlineReg();
+         // Swap current buffer
+         gScanlineEffect.srcBuffer ^= 1;
++#endif
+     }
+ }
+ 
+diff --git a/src/scrcmd.c b/src/scrcmd.c
+index 97b695e..6cbc8d2 100644
+--- a/src/scrcmd.c
++++ b/src/scrcmd.c
+@@ -48,6 +48,9 @@ static bool8 ScriptContext_NextCommandEndsScript(struct ScriptContext * ctx);
+ static u8 ScriptContext_GetQuestLogInput(struct ScriptContext * ctx);
+ 
+ static EWRAM_DATA ptrdiff_t sAddressOffset = 0; // For relative addressing in vgoto etc., used by saved scripts (e.g. Mystery Event)
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ static EWRAM_DATA u8 sQuestLogWaitButtonPressTimer = 0;
+ static EWRAM_DATA u16 sPauseCounter = 0;
+ static EWRAM_DATA u16 sMovingNpcId = 0;
+@@ -111,6 +114,7 @@ bool8 ScrCmd_specialvar(struct ScriptContext * ctx)
+     u16 * varPtr = GetVarPointer(ScriptReadHalfword(ctx));
+     u16 (*const *specialPtr)(void) = &gSpecials[ScriptReadHalfword(ctx)];
+     if (specialPtr < gSpecialsEnd)
++
+         *varPtr = (*specialPtr)();
+     else
+         AGB_ASSERT_EX(0, ABSPATH("scrcmd.c"), 263);
+@@ -135,6 +139,7 @@ bool8 ScrCmd_goto(struct ScriptContext * ctx)
+     const u8 * scrptr = (const u8 *)ScriptReadWord(ctx);
+     ScriptJump(ctx, scrptr);
+     return FALSE;
++
+ }
+ 
+ bool8 ScrCmd_return(struct ScriptContext * ctx)
+@@ -984,8 +989,16 @@ bool8 ScrCmd_applymovement(struct ScriptContext * ctx)
+ {
+     u16 localId = VarGet(ScriptReadHalfword(ctx));
+     const void *movementScript = (const void *)ScriptReadWord(ctx);
+-
+-    ScriptMovement_StartObjectMovementScript(localId, gSaveBlock1Ptr->location.mapNum, gSaveBlock1Ptr->location.mapGroup, movementScript);
++    bool8 failed;
++
++    failed = ScriptMovement_StartObjectMovementScript(localId, gSaveBlock1Ptr->location.mapNum, gSaveBlock1Ptr->location.mapGroup, movementScript);
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0420,
++                        localId,
++                        failed,
++                        gSaveBlock1Ptr->location.mapGroup | (gSaveBlock1Ptr->location.mapNum << 8),
++                        (u16)((uintptr_t)movementScript & 0xFFFF));
++#endif
+     sMovingNpcId = localId;
+     return FALSE;
+ }
+@@ -1004,7 +1017,16 @@ bool8 ScrCmd_applymovementat(struct ScriptContext * ctx)
+ 
+ static bool8 WaitForMovementFinish(void)
+ {
+-    return ScriptMovement_IsObjectMovementFinished(sMovingNpcId, sMovingNpcMapNum, sMovingNpcMapGroup);
++    bool8 finished = ScriptMovement_IsObjectMovementFinished(sMovingNpcId, sMovingNpcMapNum, sMovingNpcMapGroup);
++
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0421,
++                        sMovingNpcId,
++                        finished,
++                        sMovingNpcMapGroup | (sMovingNpcMapNum << 8),
++                        gPlayerAvatar.tileTransitionState | (gObjectEvents[gPlayerAvatar.objectEventId].heldMovementActive << 8) | (gObjectEvents[gPlayerAvatar.objectEventId].heldMovementFinished << 9));
++#endif
++    return finished;
+ }
+ 
+ bool8 ScrCmd_waitmovement(struct ScriptContext * ctx)
+@@ -1056,8 +1078,15 @@ bool8 ScrCmd_removeobjectat(struct ScriptContext * ctx)
+ bool8 ScrCmd_addobject(struct ScriptContext * ctx)
+ {
+     u16 objectId = VarGet(ScriptReadHalfword(ctx));
+-
+-    TrySpawnObjectEvent(objectId, gSaveBlock1Ptr->location.mapNum, gSaveBlock1Ptr->location.mapGroup);
++    u8 objectEventId = TrySpawnObjectEvent(objectId, gSaveBlock1Ptr->location.mapNum, gSaveBlock1Ptr->location.mapGroup);
++
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0422,
++                        objectId,
++                        objectEventId,
++                        gSaveBlock1Ptr->location.mapGroup | (gSaveBlock1Ptr->location.mapNum << 8),
++                        CheckHeap());
++#endif
+     return FALSE;
+ }
+ 
+@@ -1200,6 +1229,23 @@ bool8 ScrCmd_lockall(struct ScriptContext * ctx)
+     }
+     else
+     {
++#ifdef PORT_BRIDGE
++        struct ObjectEvent *playerObj = &gObjectEvents[gPlayerAvatar.objectEventId];
++
++        Port_SetBirchDebugEx(0x0410,
++                            gPlayerAvatar.tileTransitionState | (gPlayerAvatar.runningState << 8),
++                            playerObj->movementActionId | (playerObj->heldMovementActive << 8) | (playerObj->heldMovementFinished << 9),
++                            gPlayerAvatar.objectEventId,
++                            playerObj->facingDirection | (playerObj->movementDirection << 8));
++
++        if (IsPlayerStandingStill())
++        {
++            FreezeObjectEvents();
++            ObjectEventClearHeldMovementIfFinished(playerObj);
++            StopPlayerAvatar();
++            return FALSE;
++        }
++#endif
+         FreezeObjects_WaitForPlayer();
+         SetupNativeScript(ctx, IsFreezePlayerFinished);
+         return TRUE;
+@@ -1214,6 +1260,30 @@ bool8 ScrCmd_lock(struct ScriptContext * ctx)
+     }
+     else
+     {
++#ifdef PORT_BRIDGE
++        struct ObjectEvent *playerObj = &gObjectEvents[gPlayerAvatar.objectEventId];
++
++        // A selected object still in its step takes the wait below, which
++        // freezes it once the step ends; frozen mid-step it would stand
++        // between tiles, left unfrozen it walks on through the dialogue.
++        if (IsPlayerStandingStill()
++         && !(gObjectEvents[gSelectedObjectEvent].active && gObjectEvents[gSelectedObjectEvent].singleMovementActive))
++        {
++            if (gObjectEvents[gSelectedObjectEvent].active)
++            {
++                FreezeObjectEventsExceptOne(gSelectedObjectEvent);
++                FreezeObjectEvent(&gObjectEvents[gSelectedObjectEvent]);
++            }
++            else
++            {
++                FreezeObjectEvents();
++            }
++
++            ObjectEventClearHeldMovementIfFinished(playerObj);
++            StopPlayerAvatar();
++            return FALSE;
++        }
++#endif
+         if (gObjectEvents[gSelectedObjectEvent].active)
+         {
+             FreezeObjects_WaitForPlayerAndSelected();
+@@ -1234,6 +1304,13 @@ bool8 ScrCmd_releaseall(struct ScriptContext * ctx)
+ 
+     HideFieldMessageBox();
+     playerObjectId = GetObjectEventIdByLocalIdAndMap(LOCALID_PLAYER, 0, 0);
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0415,
++                        playerObjectId,
++                        gObjectEvents[playerObjectId].movementActionId | (gObjectEvents[playerObjectId].heldMovementActive << 8) | (gObjectEvents[playerObjectId].heldMovementFinished << 9),
++                        gPlayerAvatar.tileTransitionState,
++                        VarGet(VAR_LITTLEROOT_INTRO_STATE));
++#endif
+     ObjectEventClearHeldMovementIfFinished(&gObjectEvents[playerObjectId]);
+     ScriptMovement_UnfreezeObjectEvents();
+     UnfreezeObjectEvents();
+@@ -1267,6 +1344,9 @@ bool8 ScrCmd_message(struct ScriptContext * ctx)
+ 
+     if (msg == NULL)
+         msg = (const u8 *)ctx->data[0];
++#ifdef PORT_BRIDGE
++    msg = Port_ResolveTextPointer(msg);
++#endif
+     ShowFieldMessage(msg);
+     return FALSE;
+ }
+@@ -1277,6 +1357,9 @@ bool8 ScrCmd_loadhelp(struct ScriptContext * ctx)
+ 
+     if (msg == NULL)
+         msg = (const u8 *)ctx->data[0];
++#ifdef PORT_BRIDGE
++    msg = Port_ResolveTextPointer(msg);
++#endif
+     DrawHelpMessageWindowWithText(msg);
+     CopyWindowToVram(GetStartMenuWindowId(), COPYWIN_MAP);
+     return FALSE;
+@@ -1287,6 +1370,9 @@ bool8 ScrCmd_unloadhelp(struct ScriptContext * ctx)
+     DestroyHelpMessageWindow_();
+     return FALSE;
+ }
++#ifdef PORT_BRIDGE
++    msg = Port_ResolveTextPointer(msg);
++#endif
+ 
+ bool8 ScrCmd_messageautoscroll(struct ScriptContext * ctx)
+ {
+@@ -1300,6 +1386,9 @@ bool8 ScrCmd_messageautoscroll(struct ScriptContext * ctx)
+ 
+ bool8 ScrCmd_waitmessage(struct ScriptContext * ctx)
+ {
++#ifdef PORT_BRIDGE
++    msg = Port_ResolveTextPointer(msg);
++#endif
+     SetupNativeScript(ctx, IsFieldMessageBoxHidden);
+     return TRUE;
+ }
+@@ -1486,6 +1575,10 @@ bool8 ScrCmd_multichoicegrid(struct ScriptContext * ctx)
+         return TRUE;
+     }
+     else
++#ifdef PORT_BRIDGE
++    ptr = (u8 *)Port_ResolveTextPointer(ptr);
++#endif
++
+     {
+         return FALSE;
+     }
+@@ -1886,7 +1979,7 @@ bool8 ScrCmd_updatecoinsbox(struct ScriptContext * ctx)
+ 
+ bool8 ScrCmd_trainerbattle(struct ScriptContext * ctx)
+ {
+-    ctx->scriptPtr = BattleSetup_ConfigureTrainerBattle(ctx->scriptPtr);
++    ScriptJump(ctx, BattleSetup_ConfigureTrainerBattle(ctx->scriptPtr));
+     return FALSE;
+ }
+ 
+@@ -2081,7 +2174,30 @@ bool8 ScrCmd_setrespawn(struct ScriptContext * ctx)
+ 
+ bool8 ScrCmd_checkplayergender(struct ScriptContext * ctx)
+ {
+-    gSpecialVar_Result = gSaveBlock2Ptr->playerGender;
++    u16 playerGender = gSaveBlock2Ptr->playerGender;
++
++#ifdef PORT_BRIDGE
++    if (playerGender > FEMALE)
++    {
++        Port_SetBirchDebugEx(0x0413,
++                            playerGender,
++                            0xFFFF,
++                            VarGet(VAR_LITTLEROOT_INTRO_STATE),
++                            gPlayerAvatar.objectEventId);
++        playerGender = MALE;
++        gSaveBlock2Ptr->playerGender = playerGender;
++    }
++    else
++    {
++        Port_SetBirchDebugEx(0x0413,
++                            playerGender,
++                            0,
++                            VarGet(VAR_LITTLEROOT_INTRO_STATE),
++                            gPlayerAvatar.objectEventId);
++    }
++#endif
++
++    gSpecialVar_Result = playerGender;
+     return FALSE;
+ }
+ 
+diff --git a/src/script.c b/src/script.c
+index d0433bd..e78437c 100644
+--- a/src/script.c
++++ b/src/script.c
+@@ -5,6 +5,9 @@
+ #include "mystery_gift.h"
+ #include "constants/maps.h"
+ #include "constants/map_scripts.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ extern void ResetContextNpcTextColor(void); // field_specials
+ extern u16 CalcCRC16WithTable(u8 *data, int length); // util
+@@ -62,6 +65,9 @@ void InitScriptContext(struct ScriptContext *ctx, void *cmdTable, void *cmdTable
+ 
+ u8 SetupBytecodeScript(struct ScriptContext *ctx, const u8 *ptr)
+ {
++#ifdef PORT_BRIDGE
++    ptr = Port_ResolveScriptPointer(ptr);
++#endif
+     ctx->scriptPtr = ptr;
+     ctx->mode = SCRIPT_MODE_BYTECODE;
+     return 1;
+@@ -118,7 +124,11 @@ bool8 RunScriptCommand(struct ScriptContext *ctx)
+             if (ctx->scriptPtr == gNullScriptPtr)
+             {
+                 while (1)
++#ifndef PORTABLE
+                     asm("svc 2"); // HALT
++#else
++                    continue;
++#endif
+             }
+ 
+             cmdCode = *(ctx->scriptPtr);
+@@ -164,12 +174,18 @@ static const u8 *ScriptPop(struct ScriptContext *ctx)
+ 
+ void ScriptJump(struct ScriptContext *ctx, const u8 *ptr)
+ {
++#ifdef PORT_BRIDGE
++    ptr = Port_ResolveScriptPointer(ptr);
++#endif
+     ctx->scriptPtr = ptr;
+ }
+ 
+ void ScriptCall(struct ScriptContext *ctx, const u8 *ptr)
+ {
+     ScriptPush(ctx, ctx->scriptPtr);
++#ifdef PORT_BRIDGE
++    ptr = Port_ResolveScriptPointer(ptr);
++#endif
+     ctx->scriptPtr = ptr;
+ }
+ 
+@@ -393,7 +409,13 @@ static u8 *MapHeaderGetScriptTable(u8 tag)
+         if (*mapScripts == tag)
+         {
+             mapScripts++;
+-            return T2_READ_PTR(mapScripts);
++            {
++                u8 *ptr = T2_READ_PTR(mapScripts);
++#ifdef PORT_BRIDGE
++                ptr = (u8 *)Port_ResolveScriptPointer(ptr);
++#endif
++                return ptr;
++            }
+         }
+         mapScripts += 5;
+     }
+@@ -418,7 +440,7 @@ static u8 *MapHeaderCheckScriptTable(u8 tag)
+         u16 varIndex1;
+         u16 varIndex2;
+ 
+-        // Read first var (or .2byte terminal value)
++        // Read first var (or .short terminal value)
+         varIndex1 = T1_READ_16(ptr);
+         if (!varIndex1)
+             return NULL; // Reached end of table
+diff --git a/src/script_movement.c b/src/script_movement.c
+index e4c7fc7..c53f8b2 100644
+--- a/src/script_movement.c
++++ b/src/script_movement.c
+@@ -36,6 +36,8 @@ bool8 ScriptMovement_IsObjectMovementFinished(u8 localId, u8 mapNum, u8 mapGroup
+     if (TryGetObjectEventIdByLocalIdAndMap(localId, mapNum, mapGroup, &objEventId))
+         return TRUE;
+     taskId = GetMoveObjectsTaskId();
++    if (taskId == TASK_NONE)
++        return TRUE;
+     moveScrId = GetMovementScriptIdFromObjectEventId(taskId, objEventId);
+     if (moveScrId == OBJECT_EVENTS_COUNT)
+         return TRUE;
+@@ -210,11 +212,30 @@ static void ScriptMovement_TakeStep(u8 taskId, u8 moveScrId, u8 objEventId, cons
+         return;
+ 
+     nextMoveActionId = *movementScript;
++#ifdef PORT_BRIDGE
++    Port_SetBirchDebugEx(0x0423,
++                        objEventId,
++                        moveScrId,
++                        nextMoveActionId,
++                        (u16)((uintptr_t)movementScript & 0xFFFF));
++#endif
+     if (nextMoveActionId == MOVEMENT_ACTION_STEP_END)
+     {
+         SetMovementScriptFinished(taskId, moveScrId);
+         FreezeObjectEvent(&gObjectEvents[objEventId]);
+     }
++    else if (nextMoveActionId > MOVEMENT_ACTION_FLY_DOWN)
++    {
++#ifdef PORT_BRIDGE
++        Port_SetBirchDebugEx(0x042F,
++                            objEventId,
++                            moveScrId,
++                            nextMoveActionId,
++                            (u16)((uintptr_t)movementScript & 0xFFFF));
++#endif
++        SetMovementScriptFinished(taskId, moveScrId);
++        FreezeObjectEvent(&gObjectEvents[objEventId]);
++    }
+     else
+     {
+         if (!ObjectEventSetHeldMovement(&gObjectEvents[objEventId], nextMoveActionId))
+diff --git a/src/sound.c b/src/sound.c
+index 9060aa5..23a569f 100644
+--- a/src/sound.c
++++ b/src/sound.c
+@@ -514,6 +514,8 @@ bool8 IsCryFinished(void)
+ 
+ void StopCryAndClearCrySongs(void)
+ {
++    if (!gMPlay_PokemonCry)
++        return;
+     m4aMPlayStop(gMPlay_PokemonCry);
+     ClearPokemonCrySongs();
+ }
+diff --git a/src/sprite.c b/src/sprite.c
+index d0198d5..2f29e74 100644
+--- a/src/sprite.c
++++ b/src/sprite.c
+@@ -1,5 +1,15 @@
+ #include "global.h"
+ #include "gflib.h"
++#if defined(PLATFORM_3DS)
++#include "3ds_video.h"
++bool8 FieldEffect_IsMachineSprite(const struct Sprite *sprite);   /* field_effect.c */
++bool8 FieldEffect_IsFlySprite(const struct Sprite *sprite);       /* field_effect.c */
++#include "field_weather.h"
++#include "constants/weather.h"
++#endif
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ 
+ #define MAX_SPRITE_COPY_REQUESTS 64
+ 
+@@ -269,6 +279,13 @@ static u16 sSpriteTileRangeTags[MAX_SPRITES];
+ static u16 sSpriteTileRanges[MAX_SPRITES][2];
+ static struct AffineAnimState sAffineAnimStates[OAM_MATRIX_COUNT];
+ static u16 sSpritePaletteTags[16];
++#ifdef PLATFORM_3DS
++// The ext palettes' tags (in use by gPlttExtInUse), and the ext palette each
++// sprite is drawn with, plus one (0: its own oam.paletteNum): OAM has no room
++// for it. gSprites has a spare entry past MAX_SPRITES, reset like the rest.
++static u16 sSpritePaletteExtTags[PLTT_EXT_COUNT];
++static u8 sSpriteExtPalettes[MAX_SPRITES + 1];
++#endif
+ 
+ COMMON_DATA u32 gOamMatrixAllocBitmap = 0;
+ COMMON_DATA u8 gReservedSpritePaletteCount = 0;
+@@ -287,6 +304,34 @@ EWRAM_DATA s16 gSpriteCoordOffsetY = 0;
+ EWRAM_DATA struct OamMatrix gOamMatrices[OAM_MATRIX_COUNT] = {0};
+ EWRAM_DATA bool8 gAffineAnimsDisabled = 0;
+ 
++#ifdef PORT_BRIDGE
++/*
++ * Port: each sprite's identity, one number for as long as it lives, a new one
++ * whenever a slot takes a new sprite (phase F1 of the engine plan). Kept beside
++ * gSprites rather than in struct Sprite, so nothing of the game's layout
++ * changes. Sprites made by copying another (battle animations' clones) do not
++ * pass through CreateSpriteAt: the port numbers those (CtrSprites_Track).
++ */
++u32 gCtrSpriteId[MAX_SPRITES + 1];
++u32 gCtrSpriteNextId;
++#endif
++
++#ifdef PORT_BRIDGE
++static u32 GetPortSpriteAssetSize(const void *data, u32 declaredSize)
++{
++    u32 assetSize;
++
++    if (declaredSize >= TILE_SIZE_4BPP)
++        return declaredSize;
++
++    assetSize = Port_GetAssetSize(data);
++    if (assetSize != 0)
++        return assetSize;
++
++    return declaredSize;
++}
++#endif
++
+ void ResetSpriteData(void)
+ {
+     ResetOamRange(0, 128);
+@@ -471,11 +516,107 @@ void CopyMatricesToOamBuffer(void)
+     }
+ }
+ 
++#if defined(PLATFORM_3DS)
++/*
++ * The fog's sprites: one 64x64 picture laid on a 64-pixel lattice, scrolled.
++ * Twenty of them cover a GBA screen, with OAM's own wrap-around closing the
++ * gaps; the compositor lays the same picture over the whole wide view
++ * instead (CtrVideo_MarkFogOam), or the voxel world draws a fog of its own.
++ */
++static bool8 IsFogSprite(const struct Sprite *sprite)
++{
++    // By the template, not by the weather's sprite pointers: those outlive
++    // the field (a battle reuses the slots). Only its address is compared: a
++    // map object's template was a local of the function that spawned it, so
++    // reading it read whatever the stack held there. When that matched the
++    // fog's tag, the object was drawn over the whole screen as fog (the old
++    // lady of Route 111's rest house, mid-step).
++    return Weather_IsFogSpriteTemplate(sprite->template);
++}
++#endif
++
++#if defined(PLATFORM_3DS)
++/* OAM is sorted by subpriority, so weather cannot be identified by a fixed
++ * index. Tag the entries as the original sprite sorter writes them. */
++static bool8 IsVoxelWeatherSprite(const struct Sprite *sprite)
++{
++    unsigned i;
++    switch (gWeatherPtr->currWeather)
++    {
++    case WEATHER_SUNNY_CLOUDS:
++        for (i = 0; i < NUM_CLOUD_SPRITES; ++i)
++            if (gWeatherPtr->sprites.s1.cloudSprites[i] == sprite) return TRUE;
++        break;
++    case WEATHER_RAIN:
++    case WEATHER_RAIN_THUNDERSTORM:
++    case WEATHER_DOWNPOUR:
++        for (i = 0; i < gWeatherPtr->rainSpriteCount; ++i)
++            if (gWeatherPtr->sprites.s1.rainSprites[i] == sprite) return TRUE;
++        break;
++    case WEATHER_SNOW:
++        for (i = 0; i < gWeatherPtr->snowflakeSpriteCount; ++i)
++            if (gWeatherPtr->sprites.s1.snowflakeSprites[i] == sprite) return TRUE;
++        break;
++    case WEATHER_FOG_HORIZONTAL:
++    case WEATHER_UNDERWATER:
++        for (i = 0; i < NUM_FOG_HORIZONTAL_SPRITES; ++i)
++            if (gWeatherPtr->sprites.s2.fogHSprites[i] == sprite) return TRUE;
++        break;
++    case WEATHER_VOLCANIC_ASH:
++        for (i = 0; i < NUM_ASH_SPRITES; ++i)
++            if (gWeatherPtr->sprites.s2.ashSprites[i] == sprite) return TRUE;
++        break;
++    case WEATHER_SANDSTORM:
++        for (i = 0; i < NUM_SANDSTORM_SPRITES; ++i)
++            if (gWeatherPtr->sprites.s2.sandstormSprites1[i] == sprite) return TRUE;
++        for (i = 0; i < NUM_SWIRL_SANDSTORM_SPRITES; ++i)
++            if (gWeatherPtr->sprites.s2.sandstormSprites2[i] == sprite) return TRUE;
++        break;
++    case WEATHER_FOG_DIAGONAL:
++        for (i = 0; i < NUM_FOG_DIAGONAL_SPRITES; ++i)
++            if (gWeatherPtr->sprites.s2.fogDSprites[i] == sprite) return TRUE;
++        break;
++    case WEATHER_UNDERWATER_BUBBLES:
++        return Weather_IsBubbleSpriteTemplate(sprite->template);
++    }
++    return FALSE;
++}
++
++/* The voxel field draws the other map sprites as cards and the weather over
++ * the view (voxel_entities.c). */
++bool8 CtrSprite_IsVoxelWeather(const struct Sprite *sprite)
++{
++    return IsVoxelWeatherSprite(sprite);
++}
++
++/* A cloud of WEATHER_SUNNY_CLOUDS: shown through the water only. */
++bool8 CtrSprite_IsVoxelCloud(const struct Sprite *sprite)
++{
++    unsigned i;
++
++    if (gWeatherPtr->currWeather != WEATHER_SUNNY_CLOUDS)
++        return FALSE;
++    for (i = 0; i < NUM_CLOUD_SPRITES; ++i)
++        if (gWeatherPtr->sprites.s1.cloudSprites[i] == sprite)
++            return TRUE;
++    return FALSE;
++}
++#endif
++
+ void AddSpritesToOamBuffer(void)
+ {
+     int i = 0;
+     u8 oamIndex = 0;
+ 
++#if defined(PLATFORM_3DS)
++    CtrVideo_ClearOamAnchors();
++    CtrVideo_ClearScreenOam();
++    CtrVideo_ClearFogOam();
++    CtrVideo_ClearExtPaletteOam();
++#endif
++#if defined(PLATFORM_3DS)
++    CtrVideo_ClearVoxelWeatherOam();
++#endif
+     while (i < MAX_SPRITES)
+     {
+         struct Sprite *sprite = &gSprites[gSpriteOrder[i]];
+@@ -536,6 +677,9 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
+     ResetSprite(sprite);
+ 
+     sprite->inUse = TRUE;
++#ifdef PORT_BRIDGE
++    gCtrSpriteId[index] = ++gCtrSpriteNextId;
++#endif
+     sprite->animBeginning = TRUE;
+     sprite->affineAnimBeginning = TRUE;
+     sprite->usingSheet = TRUE;
+@@ -554,8 +698,19 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
+     if (template->tileTag == TAG_NONE)
+     {
+         s16 tileNum;
++        u32 imageSize;
+         sprite->images = template->images;
+-        tileNum = AllocSpriteTiles((u8)(sprite->images->size / TILE_SIZE_4BPP));
++#ifdef PORT_BRIDGE
++        imageSize = Port_GetSpriteFrameSize(sprite->images->data, sprite->images->size);
++        if (imageSize < TILE_SIZE_4BPP || imageSize % TILE_SIZE_4BPP != 0 || imageSize / TILE_SIZE_4BPP > 255)
++        {
++            ResetSprite(sprite);
++            return MAX_SPRITES;
++        }
++#else
++        imageSize = sprite->images->size;
++#endif
++        tileNum = AllocSpriteTiles((u8)(imageSize / TILE_SIZE_4BPP));
+         if (tileNum == -1)
+         {
+             ResetSprite(sprite);
+@@ -576,6 +731,12 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
+ 
+     if (template->paletteTag != TAG_NONE)
+         sprite->oam.paletteNum = IndexOfSpritePaletteTag(template->paletteTag);
++#ifdef PLATFORM_3DS
++    // A tag only an ext palette holds (LoadSpritePaletteExt).
++    if (template->paletteTag != TAG_NONE && gPlttExtInUse
++     && IndexOfSpritePaletteTag(template->paletteTag) == 0xFF)
++        SetSpriteExtPalette(sprite, IndexOfSpritePaletteExtTag(template->paletteTag));
++#endif
+ 
+     return index;
+ }
+@@ -614,7 +775,13 @@ void DestroySprite(struct Sprite *sprite)
+         if (!sprite->usingSheet)
+         {
+             u16 i;
+-            u16 tileEnd = (sprite->images->size / TILE_SIZE_4BPP) + sprite->oam.tileNum;
++            u32 imageSize;
++#ifdef PORT_BRIDGE
++            imageSize = Port_GetSpriteFrameSize(sprite->images->data, sprite->images->size);
++#else
++            imageSize = sprite->images->size;
++#endif
++            u16 tileEnd = (imageSize / TILE_SIZE_4BPP) + sprite->oam.tileNum;
+             for (i = sprite->oam.tileNum; i < tileEnd; i++)
+                 FREE_SPRITE_TILE(i);
+         }
+@@ -678,6 +845,9 @@ void SetOamMatrix(u8 matrixNum, u16 a, u16 b, u16 c, u16 d)
+ void ResetSprite(struct Sprite *sprite)
+ {
+     *sprite = sDummySprite;
++#ifdef PLATFORM_3DS
++    SetSpriteExtPalette(sprite, 0xFF);
++#endif
+ }
+ 
+ void CalcCenterToCornerVec(struct Sprite *sprite, u8 shape, u8 size, u8 affineMode)
+@@ -1475,7 +1645,11 @@ void SetOamMatrixRotationScaling(u8 matrixNum, s16 xScale, s16 yScale, u16 rotat
+ 
+ u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
+ {
+-    s16 tileStart = AllocSpriteTiles(sheet->size / TILE_SIZE_4BPP);
++    u32 sheetSize = sheet->size;
++#ifdef PORT_BRIDGE
++    sheetSize = GetPortSpriteAssetSize(sheet->data, sheetSize);
++#endif
++    s16 tileStart = AllocSpriteTiles(sheetSize / TILE_SIZE_4BPP);
+ 
+     if (tileStart < 0)
+     {
+@@ -1483,8 +1657,12 @@ u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
+     }
+     else
+     {
+-        AllocSpriteTileRange(sheet->tag, (u16)tileStart, sheet->size / TILE_SIZE_4BPP);
+-        CpuCopy16(sheet->data, (u8 *)OBJ_VRAM0 + TILE_SIZE_4BPP * tileStart, sheet->size);
++        const void *src = sheet->data;
++#ifdef PORT_BRIDGE
++        src = Port_ResolveAssetPointerSized(src, sheetSize);
++#endif
++        AllocSpriteTileRange(sheet->tag, (u16)tileStart, sheetSize / TILE_SIZE_4BPP);
++        CpuCopy16(src, (u8 *)OBJ_VRAM0 + TILE_SIZE_4BPP * tileStart, sheetSize);
+         return (u16)tileStart;
+     }
+ }
+@@ -1570,6 +1748,9 @@ void FreeAllSpritePalettes(void)
+     gReservedSpritePaletteCount = 0;
+     for (i = 0; i < ARRAY_COUNT(sSpritePaletteTags); i++)
+         sSpritePaletteTags[i] = TAG_NONE;
++#ifdef PLATFORM_3DS
++    gPlttExtInUse = 0;
++#endif
+ }
+ 
+ u8 LoadSpritePalette(const struct SpritePalette *palette)
+@@ -1640,7 +1821,73 @@ void FreeSpritePaletteByTag(u16 tag)
+     u8 index = IndexOfSpritePaletteTag(tag);
+     if (index != 0xFF)
+         sSpritePaletteTags[index] = TAG_NONE;
++#ifdef PLATFORM_3DS
++    else
++    {
++        index = IndexOfSpritePaletteExtTag(tag);
++        if (index != 0xFF)
++            gPlttExtInUse &= ~(1 << index);
++    }
++#endif
++}
++
++#ifdef PLATFORM_3DS
++u8 LoadSpritePaletteExt(const struct SpritePalette *palette)
++{
++    u8 index = IndexOfSpritePaletteExtTag(palette->tag);
++
++    if (index != 0xFF)
++        return index;
++    index = AllocSpritePaletteExt(palette->tag);
++    // The GBA palettes' load, at the ext palette's place past the OBJ ones.
++    if (index != 0xFF)
++        DoLoadSpritePalette(palette->data, PLTT_EXT_ID(index) - OBJ_PLTT_OFFSET);
++    return index;
++}
++
++u8 AllocSpritePaletteExt(u16 tag)
++{
++    u8 i;
++
++    for (i = 0; i < PLTT_EXT_COUNT; i++)
++    {
++        if (!(gPlttExtInUse & (1 << i)))
++        {
++            gPlttExtInUse |= 1 << i;
++            sSpritePaletteExtTags[i] = tag;
++            return i;
++        }
++    }
++    return 0xFF;
++}
++
++u8 IndexOfSpritePaletteExtTag(u16 tag)
++{
++    u8 i;
++
++    for (i = 0; i < PLTT_EXT_COUNT; i++)
++        if ((gPlttExtInUse & (1 << i)) && sSpritePaletteExtTags[i] == tag)
++            return i;
++    return 0xFF;
++}
++
++void SetSpriteExtPalette(struct Sprite *sprite, u8 extPalette)
++{
++    u32 id = sprite - gSprites;
++
++    if (id <= MAX_SPRITES)
++        sSpriteExtPalettes[id] = extPalette < PLTT_EXT_COUNT ? extPalette + 1 : 0;
++}
++
++u8 GetSpriteExtPalette(const struct Sprite *sprite)
++{
++    u32 id = sprite - gSprites;
++
++    if (id > MAX_SPRITES || sSpriteExtPalettes[id] == 0)
++        return 0xFF;
++    return sSpriteExtPalettes[id] - 1;
+ }
++#endif
+ 
+ void SetSubspriteTables(struct Sprite *sprite, const struct SubspriteTable *subspriteTables)
+ {
+diff --git a/src/string_util.c b/src/string_util.c
+index 5c26d15..2222ad6 100644
+--- a/src/string_util.c
++++ b/src/string_util.c
+@@ -13,6 +13,13 @@ EWRAM_DATA u8 gUnknownStringVar[16] = {0};
+ 
+ static const u8 sDigits[] = __("0123456789ABCDEF");
+ 
++#ifdef PORT_BRIDGE
++static const u8 *ResolveTextString(const u8 *str)
++{
++    return Port_ResolveTextPointer(str);
++}
++#endif
++
+ static const s32 sPowersOfTen[] =
+ {
+              1,
+@@ -90,6 +97,10 @@ u8 *StringCopy_PlayerName(u8 *dest, const u8 *src)
+ 
+ u8 *StringCopy(u8 *dest, const u8 *src)
+ {
++#ifdef PORT_BRIDGE
++    src = ResolveTextString(src);
++#endif
++
+     while (*src != EOS)
+     {
+         *dest = *src;
+@@ -113,6 +124,10 @@ u8 *StringCopyN(u8 *dest, const u8 *src, u8 n)
+ {
+     u16 i;
+ 
++#ifdef PORT_BRIDGE
++    src = ResolveTextString(src);
++#endif
++
+     for (i = 0; i < n; i++)
+         dest[i] = src[i];
+ 
+@@ -131,6 +146,10 @@ u16 StringLength(const u8 *str)
+ {
+     u16 length = 0;
+ 
++#ifdef PORT_BRIDGE
++    str = ResolveTextString(str);
++#endif
++
+     while (str[length] != EOS)
+         length++;
+ 
+@@ -139,6 +158,11 @@ u16 StringLength(const u8 *str)
+ 
+ s32 StringCompare(const u8 *str1, const u8 *str2)
+ {
++#ifdef PORT_BRIDGE
++    str1 = ResolveTextString(str1);
++    str2 = ResolveTextString(str2);
++#endif
++
+     while (*str1 == *str2)
+     {
+         if (*str1 == EOS)
+@@ -152,6 +176,11 @@ s32 StringCompare(const u8 *str1, const u8 *str2)
+ 
+ s32 StringCompareN(const u8 *str1, const u8 *str2, u32 n)
+ {
++#ifdef PORT_BRIDGE
++    str1 = ResolveTextString(str1);
++    str2 = ResolveTextString(str2);
++#endif
++
+     while (*str1 == *str2)
+     {
+         if (*str1 == EOS)
+@@ -283,6 +312,10 @@ u8 *ConvertIntToHexStringN(u8 *dest, s32 value, enum StringConvertMode mode, u8
+ 
+ u8 *StringExpandPlaceholders(u8 *dest, const u8 *src)
+ {
++#ifdef PORT_BRIDGE
++    src = ResolveTextString(src);
++#endif
++
+     for (;;)
+     {
+         u8 c = *src++;
+@@ -336,6 +369,10 @@ u8 *StringBraille(u8 *dest, const u8 *src)
+     u8 setBrailleFont[] = { 0xFC, 0x06, 0x06, 0xFF };
+     u8 gotoLine2[] = { 0xFE, 0xFC, 0x0E, 0x02, 0xFF };
+ 
++#ifdef PORT_BRIDGE
++    src = ResolveTextString(src);
++#endif
++
+     dest = StringCopy(dest, setBrailleFont);
+ 
+     for (;;)
+@@ -510,6 +547,10 @@ u8 *StringFill(u8 *dest, u8 c, u16 n)
+ 
+ u8 *StringCopyPadded(u8 *dest, const u8 *src, u8 c, u16 n)
+ {
++#ifdef PORT_BRIDGE
++    src = ResolveTextString(src);
++#endif
++
+     while (*src != EOS)
+     {
+         *dest++ = *src++;
+@@ -561,6 +602,10 @@ u32 StringLength_Multibyte(const u8 *str)
+ {
+     u32 length = 0;
+ 
++#ifdef PORT_BRIDGE
++    str = ResolveTextString(str);
++#endif
++
+     while (*str != EOS)
+     {
+         if (*str == 0xF9)
+@@ -651,6 +696,11 @@ s32 StringCompareWithoutExtCtrlCodes(const u8 *str1, const u8 *str2)
+ {
+     s32 retVal = 0;
+ 
++#ifdef PORT_BRIDGE
++    str1 = ResolveTextString(str1);
++    str2 = ResolveTextString(str2);
++#endif
++
+     while (1)
+     {
+         str1 = SkipExtCtrlCode(str1);
+diff --git a/src/task.c b/src/task.c
+index 01503dc..9f2788f 100644
+--- a/src/task.c
++++ b/src/task.c
+@@ -9,6 +9,36 @@ COMMON_DATA struct Task gTasks[NUM_TASKS] = {0};
+ static void InsertTask(u8 newTaskId);
+ static u8 FindFirstActiveTask();
+ 
++#ifdef PORT_BRIDGE
++static bool8 TaskIsActiveRaw(u8 taskId)
++{
++    const volatile u8 *taskRaw = (const volatile u8 *)&gTasks[taskId];
++
++    return taskRaw[4] == TRUE;
++}
++
++static u8 TaskPrevRaw(u8 taskId)
++{
++    const volatile u8 *taskRaw = (const volatile u8 *)&gTasks[taskId];
++
++    return taskRaw[5];
++}
++
++static u8 TaskNextRaw(u8 taskId)
++{
++    const volatile u8 *taskRaw = (const volatile u8 *)&gTasks[taskId];
++
++    return taskRaw[6];
++}
++
++static u8 TaskPriorityRaw(u8 taskId)
++{
++    const volatile u8 *taskRaw = (const volatile u8 *)&gTasks[taskId];
++
++    return taskRaw[7];
++}
++#endif
++
+ void ResetTasks(void)
+ {
+     u8 i;
+@@ -33,7 +63,11 @@ u8 CreateTask(TaskFunc func, u8 priority)
+ 
+     for (i = 0; i < NUM_TASKS; i++)
+     {
++        #ifdef PORT_BRIDGE
++        if (!TaskIsActiveRaw(i))
++        #else
+         if (!gTasks[i].isActive)
++        #endif
+         {
+             gTasks[i].func = func;
+             gTasks[i].priority = priority;
+@@ -61,26 +95,51 @@ static void InsertTask(u8 newTaskId)
+ 
+     while (1)
+     {
++        #ifdef PORT_BRIDGE
++        if (gTasks[newTaskId].priority < TaskPriorityRaw(taskId))
++        #else
+         if (gTasks[newTaskId].priority < gTasks[taskId].priority)
++        #endif
+         {
+             // We've found a task with a higher priority value,
+             // so we insert the new task before it.
++            #ifdef PORT_BRIDGE
++            gTasks[newTaskId].prev = TaskPrevRaw(taskId);
++            #else
+             gTasks[newTaskId].prev = gTasks[taskId].prev;
++            #endif
+             gTasks[newTaskId].next = taskId;
++            #ifdef PORT_BRIDGE
++            if (TaskPrevRaw(taskId) != HEAD_SENTINEL)
++                gTasks[TaskPrevRaw(taskId)].next = newTaskId;
++            #else
+             if (gTasks[taskId].prev != HEAD_SENTINEL)
+                 gTasks[gTasks[taskId].prev].next = newTaskId;
++            #endif
+             gTasks[taskId].prev = newTaskId;
+             return;
+         }
++        #ifdef PORT_BRIDGE
++        if (TaskNextRaw(taskId) == TAIL_SENTINEL)
++        #else
+         if (gTasks[taskId].next == TAIL_SENTINEL)
++        #endif
+         {
+             // We've reached the end.
+             gTasks[newTaskId].prev = taskId;
++            #ifdef PORT_BRIDGE
++            gTasks[newTaskId].next = TaskNextRaw(taskId);
++            #else
+             gTasks[newTaskId].next = gTasks[taskId].next;
++            #endif
+             gTasks[taskId].next = newTaskId;
+             return;
+         }
++        #ifdef PORT_BRIDGE
++        taskId = TaskNextRaw(taskId);
++        #else
+         taskId = gTasks[taskId].next;
++        #endif
+     }
+ }
+ 
+@@ -91,9 +150,29 @@ void DestroyTask(u8 taskId)
+     if (taskId >= NUM_TASKS) return;
+ #endif
+     if (gTasks[taskId].isActive)
++    #endif
+     {
+         gTasks[taskId].isActive = FALSE;
+ 
++        #ifdef PORT_BRIDGE
++        if (TaskPrevRaw(taskId) == HEAD_SENTINEL)
++        {
++            if (TaskNextRaw(taskId) != TAIL_SENTINEL)
++                gTasks[TaskNextRaw(taskId)].prev = HEAD_SENTINEL;
++        }
++        else
++        {
++            if (TaskNextRaw(taskId) == TAIL_SENTINEL)
++            {
++                gTasks[TaskPrevRaw(taskId)].next = TAIL_SENTINEL;
++            }
++            else
++            {
++                gTasks[TaskPrevRaw(taskId)].next = TaskNextRaw(taskId);
++                gTasks[TaskNextRaw(taskId)].prev = TaskPrevRaw(taskId);
++            }
++        }
++        #else
+         if (gTasks[taskId].prev == HEAD_SENTINEL)
+         {
+             if (gTasks[taskId].next != TAIL_SENTINEL)
+@@ -111,11 +190,30 @@ void DestroyTask(u8 taskId)
+                 gTasks[gTasks[taskId].next].prev = gTasks[taskId].prev;
+             }
+         }
++        #endif
+     }
+ }
+ 
+ void RunTasks(void)
+ {
++#ifdef PORT_BRIDGE
++    u8 taskId = FindFirstActiveTask();
++
++    Port_SetDmaDebugEx(0x0026, (u16)((uintptr_t)gTasks >> 16), (u16)(uintptr_t)gTasks, gTasks[0].isActive | (gTasks[0].prev << 8), gTasks[0].next | (gTasks[0].priority << 8));
++
++    if (taskId != NUM_TASKS)
++    {
++        do
++        {
++            uintptr_t func = (uintptr_t)gTasks[taskId].func;
++            Port_SetDmaDebugEx(0x0024, taskId, TaskIsActiveRaw(taskId) | (TaskPrevRaw(taskId) << 8), (u16)(func >> 16), (u16)func);
++            gTasks[taskId].func(taskId);
++            func = (uintptr_t)gTasks[taskId].func;
++            Port_SetDmaDebugEx(0x0025, taskId, TaskIsActiveRaw(taskId) | (TaskNextRaw(taskId) << 8), (u16)(func >> 16), (u16)func);
++            taskId = TaskNextRaw(taskId);
++        } while (taskId != TAIL_SENTINEL);
++    }
++#else
+     u8 taskId = FindFirstActiveTask();
+ 
+     if (taskId != NUM_TASKS)
+@@ -126,15 +224,43 @@ void RunTasks(void)
+             taskId = gTasks[taskId].next;
+         } while (taskId != TAIL_SENTINEL);
+     }
++#endif
+ }
+ 
+ static u8 FindFirstActiveTask()
+ {
+     u8 taskId;
++#ifdef PORT_BRIDGE
++    const u8 *raw = (const u8 *)gTasks;
++#endif
++
++#ifdef PORT_BRIDGE
++    Port_SetDmaDebugEx(0x0027, (u16)((uintptr_t)gTasks >> 16), (u16)(uintptr_t)gTasks, gTasks[0].isActive | (gTasks[0].prev << 8), gTasks[0].next | (gTasks[0].priority << 8));
++#endif
+ 
+     for (taskId = 0; taskId < NUM_TASKS; taskId++)
++    {
++#ifdef PORT_BRIDGE
++        if (TaskIsActiveRaw(taskId) && TaskPrevRaw(taskId) == HEAD_SENTINEL)
++            break;
++#else
+         if (gTasks[taskId].isActive == TRUE && gTasks[taskId].prev == HEAD_SENTINEL)
+             break;
++#endif
++    }
++
++#ifdef PORT_BRIDGE
++    if (taskId < NUM_TASKS)
++        Port_SetDmaDebugEx(0x0023, taskId, gTasks[taskId].isActive | (gTasks[taskId].prev << 8), gTasks[taskId].next, 0);
++    else
++        Port_SetDmaDebugEx(0x0023, taskId, 0, 0, 0);
++
++    Port_SetDmaDebug2(0x0030,
++                     raw[4] | (raw[5] << 8),
++                     raw[6] | (raw[7] << 8),
++                     raw[40] | (raw[41] << 8),
++                     raw[42] | (raw[43] << 8));
++#endif
+ 
+     return taskId;
+ }
+@@ -164,7 +290,11 @@ bool8 FuncIsActiveTask(TaskFunc func)
+     u8 i;
+ 
+     for (i = 0; i < NUM_TASKS; i++)
++        #ifdef PORT_BRIDGE
++        if (TaskIsActiveRaw(i) && gTasks[i].func == func)
++        #else
+         if (gTasks[i].isActive == TRUE && gTasks[i].func == func)
++        #endif
+             return TRUE;
+ 
+     return FALSE;
+@@ -175,7 +305,11 @@ u8 FindTaskIdByFunc(TaskFunc func)
+     s32 i;
+ 
+     for (i = 0; i < NUM_TASKS; i++)
++        #ifdef PORT_BRIDGE
++        if (TaskIsActiveRaw(i) && gTasks[i].func == func)
++        #else
+         if (gTasks[i].isActive == TRUE && gTasks[i].func == func)
++        #endif
+             return (u8)i;
+ 
+     return -1;
+@@ -187,7 +321,11 @@ u8 GetTaskCount(void)
+     u8 count = 0;
+ 
+     for (i = 0; i < NUM_TASKS; i++)
++        #ifdef PORT_BRIDGE
++        if (TaskIsActiveRaw(i))
++        #else
+         if (gTasks[i].isActive == TRUE)
++        #endif
+             count++;
+ 
+     return count;
+diff --git a/src/text.c b/src/text.c
+index f3eef07..ad941cd 100644
+--- a/src/text.c
++++ b/src/text.c
+@@ -547,6 +547,20 @@ bool8 TextPrinterWaitAutoMode(struct TextPrinter *textPrinter)
+     }
+ }
+ 
++#ifdef PLATFORM_3DS
++// menu.c: a tap on a game screen shown on the 3DS bottom screen (the bag),
++// which goes on with a message as A or B would.
++bool8 CtrMenu_TakeAck(void);
++#define TEXT_AB_NEW() (JOY_NEW(A_BUTTON | B_BUTTON) || CtrMenu_TakeAck())
++// A tap that sped a message up keeps it going fast, as A held would, until
++// the message waits.
++static bool8 sCtrTextHurry;
++#define TEXT_AB_HELD() (JOY_HELD(A_BUTTON | B_BUTTON) || sCtrTextHurry)
++#else
++#define TEXT_AB_NEW() JOY_NEW(A_BUTTON | B_BUTTON)
++#define TEXT_AB_HELD() JOY_HELD(A_BUTTON | B_BUTTON)
++#endif
++
+ bool16 TextPrinterWaitWithDownArrow(struct TextPrinter *textPrinter)
+ {
+     bool8 result = FALSE;
+@@ -557,7 +571,10 @@ bool16 TextPrinterWaitWithDownArrow(struct TextPrinter *textPrinter)
+     else
+     {
+         TextPrinterDrawDownArrow(textPrinter);
+-        if (JOY_NEW(A_BUTTON | B_BUTTON))
++#ifdef PLATFORM_3DS
++        sCtrTextHurry = FALSE;
++#endif
++        if (TEXT_AB_NEW())
+         {
+             result = TRUE;
+             PlaySE(SE_SELECT);
+@@ -575,7 +592,10 @@ bool16 TextPrinterWait(struct TextPrinter *textPrinter)
+     }
+     else
+     {
+-        if (JOY_NEW(A_BUTTON | B_BUTTON))
++#ifdef PLATFORM_3DS
++        sCtrTextHurry = FALSE;
++#endif
++        if (TEXT_AB_NEW())
+         {
+             result = TRUE;
+             PlaySE(SE_SELECT);
+@@ -636,7 +656,7 @@ u16 RenderText(struct TextPrinter *textPrinter)
+     switch (textPrinter->state)
+     {
+     case RENDER_STATE_HANDLE_CHAR:
+-        if (JOY_HELD(A_BUTTON | B_BUTTON) && subStruct->hasPrintBeenSpedUp)
++        if (TEXT_AB_HELD() && subStruct->hasPrintBeenSpedUp)
+             textPrinter->delayCounter = 0;
+ 
+         if (textPrinter->delayCounter && textPrinter->textSpeed)
+@@ -644,6 +664,9 @@ u16 RenderText(struct TextPrinter *textPrinter)
+             textPrinter->delayCounter--;
+             if (gTextFlags.canABSpeedUpPrint && JOY_NEW(A_BUTTON | B_BUTTON))
+             {
++#ifdef PLATFORM_3DS
++                sCtrTextHurry = !JOY_NEW(A_BUTTON | B_BUTTON);
++#endif
+                 subStruct->hasPrintBeenSpedUp = TRUE;
+                 textPrinter->delayCounter = 0;
+             }
+@@ -931,7 +954,11 @@ static s32 GetStringWidthFixedWidthFont(const u8 *str, u8 fontId, u8 letterSpaci
+ 
+     width = 0;
+     line = 0;
++#ifdef PORT_BRIDGE
++    strLocal = ResolveTextString(str);
++#else
+     strLocal = str;
++#endif
+     strPos = 0;
+ 
+     do
+@@ -1044,6 +1071,10 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
+     lineWidth = 0;
+     bufferPointer = NULL;
+ 
++#ifdef PORT_BRIDGE
++    str = ResolveTextString(str);
++#endif
++
+     while (*str != EOS)
+     {
+         switch (*str)
+@@ -1071,6 +1102,9 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
+         case CHAR_DYNAMIC:
+             if (bufferPointer == NULL)
+                 bufferPointer = DynamicPlaceholderTextUtil_GetPlaceholderPtr(*++str);
++#ifdef PORT_BRIDGE
++            bufferPointer = ResolveTextString(bufferPointer);
++#endif
+             while (*bufferPointer != EOS)
+             {
+                 glyphWidth = func(*bufferPointer++, isJapanese);
+@@ -1196,7 +1230,11 @@ u8 RenderTextHandleBold(u8 *pixels, u8 fontId, u8 *str, int a3, int a4, int a5,
+     shadowColor = 3;
+ 
+     GenerateFontHalfRowLookupTable(TEXT_COLOR_WHITE, TEXT_COLOR_TRANSPARENT, TEXT_COLOR_LIGHT_GRAY);
++#ifdef PORT_BRIDGE
++    strLocal = (u8 *)ResolveTextString(str);
++#else
+     strLocal = str;
++#endif
+     strPos = 0;
+ 
+     do
+diff --git a/src/tileset_anims.c b/src/tileset_anims.c
+index 04854a2..b56b999 100644
+--- a/src/tileset_anims.c
++++ b/src/tileset_anims.c
+@@ -6,6 +6,18 @@ static EWRAM_DATA struct {
+     u16 size;
+ } sTilesetDMA3TransferBuffer[20] = {0};
+ 
++#ifdef PLATFORM_3DS
++#include "3ds_video.h"
++#endif
++
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++
++// Largest simultaneous updates: 30 primary tiles and 96 secondary tiles.
++// This frame-local storage survives game-heap resets without growing a cache.
++static EWRAM_DATA u16 sTilesetAnimData[0x800] = {0};
++static u16 sTilesetAnimDataSize;
++#endif
+ static u8 sTilesetDMA3TransferBufferSize;
+ static u16 sPrimaryTilesetAnimCounter;
+ static u16 sPrimaryTilesetAnimCounterMax;
+@@ -137,13 +149,29 @@ static const u16 *const sTilesetAnims_CeladonGym_Flowers[] = {
+ static void ResetTilesetAnimBuffer(void)
+ {
+     sTilesetDMA3TransferBufferSize = 0;
++#ifdef PORT_BRIDGE
++    sTilesetAnimDataSize = 0;
++#endif
+     CpuFill32(0, sTilesetDMA3TransferBuffer, sizeof sTilesetDMA3TransferBuffer);
+ }
+ 
+ static void AppendTilesetAnimToBuffer(const u16 *src, u16 *dest, u16 size)
+ {
+-    if (sTilesetDMA3TransferBufferSize < 20)
++    if (sTilesetDMA3TransferBufferSize < ARRAY_COUNT(sTilesetDMA3TransferBuffer))
+     {
++#ifdef PORT_BRIDGE
++        if (Port_IsAssetStub(src))
++        {
++            void *data = (u8 *)sTilesetAnimData + sTilesetAnimDataSize;
++
++            // Do I/O before VBlank and never enqueue a stub or a partial read.
++            if (size > sizeof(sTilesetAnimData) - sTilesetAnimDataSize
++             || !Port_LoadAssetPointerToBufferSized(src, data, size))
++                return;
++            src = data;
++            sTilesetAnimDataSize += size;
++        }
++#endif
+         sTilesetDMA3TransferBuffer[sTilesetDMA3TransferBufferSize].src = src;
+         sTilesetDMA3TransferBuffer[sTilesetDMA3TransferBufferSize].dest = dest;
+         sTilesetDMA3TransferBuffer[sTilesetDMA3TransferBufferSize].size = size;
+@@ -156,9 +184,21 @@ void TransferTilesetAnimsBuffer(void)
+     int i;
+ 
+     for (i = 0; i < sTilesetDMA3TransferBufferSize; i++)
++#ifdef PORT_BRIDGE
++        memcpy(sTilesetDMA3TransferBuffer[i].dest, sTilesetDMA3TransferBuffer[i].src, sTilesetDMA3TransferBuffer[i].size);
++#else
+         DmaCopy16(3, sTilesetDMA3TransferBuffer[i].src, sTilesetDMA3TransferBuffer[i].dest, sTilesetDMA3TransferBuffer[i].size);
++#endif
+ 
++#ifdef PLATFORM_3DS
++    for (i = 0; i < sTilesetDMA3TransferBufferSize; ++i)
++        CtrVideo_NotifyTilesetAnimWrite(sTilesetDMA3TransferBuffer[i].dest,
++                                        sTilesetDMA3TransferBuffer[i].size);
++#endif
+     sTilesetDMA3TransferBufferSize = 0;
++#ifdef PORT_BRIDGE
++    sTilesetAnimDataSize = 0;
++#endif
+ }
+ 
+ void InitTilesetAnimations(void)
+@@ -170,6 +210,9 @@ void InitTilesetAnimations(void)
+ 
+ void InitSecondaryTilesetAnimation(void)
+ {
++#ifdef PORT_BRIDGE
++    ResetTilesetAnimBuffer();
++#endif
+     _InitSecondaryTilesetAnimation();
+ }
+ 
+diff --git a/src/trainer_card.c b/src/trainer_card.c
+index ab959d6..b5ee892 100644
+--- a/src/trainer_card.c
++++ b/src/trainer_card.c
+@@ -477,6 +477,9 @@ static void CloseTrainerCard(u8 taskId)
+     FreeAllWindowBuffers();
+     FREE_AND_SET_NULL(sTrainerCardDataPtr);
+     DestroyTask(taskId);
++#ifdef PORTABLE
++    SetVBlankHBlankCallbacksToNull(); // UB: fixes use after free of sData in VBlank callback
++#endif
+ }
+ 
+ // States for Task_TrainerCard. Skips the initial states, which are done once in order
+diff --git a/src/trainer_see.c b/src/trainer_see.c
+index a71113b..5f2d440 100644
+--- a/src/trainer_see.c
++++ b/src/trainer_see.c
+@@ -1,4 +1,7 @@
+ #include "global.h"
++#ifdef PORT_BRIDGE
++#include "port_platform.h"
++#endif
+ #include "battle_setup.h"
+ #include "event_object_movement.h"
+ #include "field_effect.h"
+@@ -660,6 +663,9 @@ u8 FldEff_ExclamationMarkIcon1(void)
+ 
+     if (spriteId != MAX_SPRITES)
+         SetIconSpriteData(&gSprites[spriteId], FLDEFF_EXCLAMATION_MARK_ICON, 0);
++    else
++        // No sprite callback will run to finish the trainer's wait.
++        FieldEffectActiveListRemove(FLDEFF_EXCLAMATION_MARK_ICON);
+ 
+     return 0;
+ }
+diff --git a/src/union_room.c b/src/union_room.c
+index 91bd92c..54245a3 100644
+--- a/src/union_room.c
++++ b/src/union_room.c
+@@ -195,6 +195,10 @@ enum {
+     PLIST_CONTACTED,
+ };
+ 
++#ifdef PORT_BRIDGE
++// The nurse can query this before InitUnionRoom has ever run.
++static EWRAM_DATA u8 sUnionRoomPlayerName[12] = {EOS};
++#else
+ static EWRAM_DATA u8 sUnionRoomPlayerName[12] = {};
+ static EWRAM_DATA u8 sPlayerCurrActivity = 0;
+ static EWRAM_DATA u8 sPlayerActivityGroupSize = 0;
+@@ -3534,6 +3538,7 @@ void InitUnionRoom(void)
+ #endif
+ }
+ 
++#ifndef PORTABLE
+ static void Task_InitUnionRoom(u8 taskId)
+ {
+     s32 i;
+@@ -3602,6 +3607,7 @@ static void Task_InitUnionRoom(u8 taskId)
+         break;
+     }
+ }
++#endif
+ 
+ bool16 BufferUnionRoomPlayerName(void)
+ {

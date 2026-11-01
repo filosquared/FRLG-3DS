@@ -32,3 +32,10 @@ image = "devkitpro/devkitarm@sha256:116afba8df8453961de2936ffab20dd441edf4d68285
 [agbcc]
 repository = "https://github.com/pret/agbcc.git"
 commit = "da598c1d918402c42c0c0d7128ba14567f3175e9"
+
+# FireRed/LeafGreen (work in progress, docs/FIRERED_PORT.md):
+# tools/bootstrap.py --game firered builds on this pinned pret/pokefirered,
+# with patches/pokefirered/.
+[pokefirered]
+repository = "https://github.com/pret/pokefirered.git"
+commit = "ce6406d8c2eaf46d543c8a2606de0c3cb1951982"
