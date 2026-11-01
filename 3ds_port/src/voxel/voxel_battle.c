@@ -135,11 +135,20 @@ static uint8_t KindOf(unsigned behavior)
 {
     if (MetatileBehavior_IsTallGrass(behavior) || MetatileBehavior_IsLongGrass(behavior))
         return GROUND_GRASS;
+#ifdef CTR_FRLG
+    /* FRLG: FireRed's predicates (no deep sand; IsSurfable covers its water). */
+    if (MetatileBehavior_IsSand(behavior))
+        return GROUND_SAND;
+    if (MetatileBehavior_IsSurfable(behavior)
+     || MetatileBehavior_IsDeepWaterTerrain(behavior))
+        return GROUND_WATER;
+#else
     if (MetatileBehavior_IsSandOrDeepSand(behavior))
         return GROUND_SAND;
     if (MetatileBehavior_IsSurfableWaterOrUnderwater(behavior)
      || MetatileBehavior_IsDeepOrOceanWater(behavior))
         return GROUND_WATER;
+#endif
     return GROUND_PLAIN;
 }
 
@@ -383,8 +392,15 @@ void VoxelBattle_BeginStage(void)
     const struct ObjectEvent *player = &gObjectEvents[gPlayerAvatar.objectEventId];
     const VoxelMapInstance *current = VoxelWorld_Instance(0);
     bool surfing = TestPlayerAvatarFlags(PLAYER_AVATAR_FLAG_SURFING) != 0;
+#ifdef CTR_FRLG
+    /* FRLG: no recorded battles or Frontier; its towers and the Pokédude's
+     * demonstrations are trainer battles too. */
+    bool wild = !(gBattleTypeFlags & (BATTLE_TYPE_TRAINER | BATTLE_TYPE_LINK | BATTLE_TYPE_EREADER_TRAINER
+                                      | BATTLE_TYPE_BATTLE_TOWER | BATTLE_TYPE_TRAINER_TOWER | BATTLE_TYPE_POKEDUDE));
+#else
     bool wild = !(gBattleTypeFlags & (BATTLE_TYPE_TRAINER | BATTLE_TYPE_LINK | BATTLE_TYPE_RECORDED_LINK
                                       | BATTLE_TYPE_FRONTIER | BATTLE_TYPE_EREADER_TRAINER));
+#endif
     StageSearch *search = &sStage.search;
     int frontX = 0, frontZ = 0;
     float px, pz;

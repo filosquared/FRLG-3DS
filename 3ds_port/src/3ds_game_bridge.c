@@ -8,11 +8,15 @@
 #include "main.h"
 #include "overworld.h"
 #endif
+#ifndef CTR_FRLG
 #include "siirtc.h"
+#endif
 #include "gba/flash_internal.h"
 
+#ifndef CTR_FRLG
 static time_t sClockOffset;
 static u8 sRtcStatus = SIIRTCINFO_24HOUR;
+#endif
 
 void CtrEmu_Reset(void)
 {
@@ -83,7 +87,11 @@ u16 Platform_GetKeyInput(void)
 #ifdef CTR_TEST_SWOOP
     /* Emulator aid (3ds_game_full.c): A tapped through the intro, the title
      * and the menu until the field is up, for a keyboard-less run. */
+#ifdef CTR_FRLG
+    if (gMain.callback2 != CB2_Overworld && gMain.vblankCounter2 % 40 == 0)
+#else
     if (gMain.callback2 != CB2_Overworld && gMain.vblankCounter1 % 40 == 0)
+#endif
         held |= A_BUTTON;
 #endif
     REG_KEYINPUT = held ^ KEYS_MASK;
@@ -100,6 +108,9 @@ void SoftReset(u32 flags)
     CtrGame_SoftReset();
 }
 
+#ifndef CTR_FRLG
+/* FRLG: FireRed has no cartridge RTC (no siirtc.c); the day/night clock reads
+ * the 3DS clock directly (3ds_daynight.c), so these hooks only exist for Emerald. */
 static u8 Bcd(unsigned value) { return ((value / 10) << 4) | (value % 10); }
 static unsigned FromBcd(u8 value) { return (value >> 4) * 10 + (value & 15); }
 
@@ -167,6 +178,8 @@ void Platform_SetAlarm(u8 *alarmData)
     (void)alarmData;
     CTR_UNIMPLEMENTED("RTC_ALARM: hardware alarm not supported");
 }
+
+#endif /* !CTR_FRLG */
 
 /*
  * Nothing to flush: Port_WriteFlash commits each sector to the file as the game

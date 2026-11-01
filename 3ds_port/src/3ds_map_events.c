@@ -10,8 +10,10 @@
 #include "global.h"
 #include "fieldmap.h"
 #include "overworld.h"
+#ifndef CTR_FRLG
 #include "battle_pyramid.h"
 #include "trainer_hill.h"
+#endif
 #include "3ds_map_events.h"
 
 static uint32_t sVersion, sCells, sCollision, sReloads;
@@ -84,9 +86,11 @@ CELL_SETTER(MapGridSetMetatileImpassabilityAt, bool32)
 RELOAD(InitMap, (void), ())
 RELOAD(InitMapFromSavedGame, (void), ())
 RELOAD(SetCurrentMapLayout, (u16 mapLayoutId), (mapLayoutId))
+#ifndef CTR_FRLG /* FireRed has neither the Battle Pyramid nor Trainer Hill */
 RELOAD(GenerateBattlePyramidFloorLayout, (u16 *backupMapData, bool8 setPlayerPosition),
        (backupMapData, setPlayerPosition))
 RELOAD(GenerateTrainerHillFloorLayout, (u16 *mapArg), (mapArg))
+#endif
 
 /* Into a connected map: the layout is the next map's, the saved view of the
  * last one pasted back over it. */

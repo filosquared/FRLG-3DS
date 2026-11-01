@@ -18,7 +18,9 @@
 #include "sound.h"
 #include "characters.h"
 #include "item.h"
+#ifndef CTR_FRLG
 #include "constants/item.h"
+#endif
 #include "constants/items.h"
 #include "constants/songs.h"
 

@@ -24,14 +24,22 @@
 #include "battle_interface.h"
 #include "battle_anim.h"
 #include "battle_gfx_sfx_util.h"
+#ifdef CTR_FRLG
+#include "text.h"
+#else
 #include "fonts.h"
+#endif
 #include "palette.h"
 #include "pokemon.h"
 #include "sprite.h"
 #include "battle_message.h"
 #include "string_util.h"
 #include "strings.h"
+#ifdef CTR_FRLG
+#include "characters.h"
+#else
 #include "constants/characters.h"
+#endif
 
 #include "3ds_battle_hud.h"
 #include "3ds_log.h"
@@ -616,6 +624,12 @@ static void MakeLabels(const uint16_t *boxTileVram)
 
 /* The Japanese game's strings are in its Japanese glyph set: glyphs all 8
  * pixels wide, a sheet of 16 a row (text.c's DecompressGlyph_Normal). */
+#ifdef CTR_FRLG
+/* FRLG: FireRed's normal font, exported by the port build of text.c
+ * (3ds_compat.c resolves it the same way). */
+extern const u16 gFontNormalLatinGlyphs[];
+extern const u8 gFontNormalLatinGlyphWidths[];
+#endif
 #if GAME_LANGUAGE == LANGUAGE_JAPANESE
 #define HUD_GLYPHS gFontNormalJapaneseGlyphs
 #else
@@ -891,7 +905,11 @@ static void Compose(int index, int top, int bottom)
             uint8_t text[24], *p;
 
             DrawText(pic, gText_SafariBalls, Px(layout->nameX), y, TEXT_FG);
+            #ifdef CTR_FRLG
+            p = (uint8_t *)StringCopy(text, gText_HighlightRed_Left);
+#else
             p = (uint8_t *)StringCopy(text, gText_SafariBallLeft);
+#endif
             Digits(p, slot->safariBalls);
             DrawTextRight(pic, text, Px(95.5f), Px(23) - 3);
         }

@@ -43,6 +43,9 @@ ROOT_DATA_SRCS := $(filter-out $(ROOT)/data/maps.s,$(ROOT_DATA_SRCS))
 # Script sections are assembled but not linked: their pointers are unaligned,
 # so they move to RomFS and land in a reserved region (gen_script_bundle.py).
 SCRIPT_DATA_SRCS := battle_ai_scripts battle_anim_scripts battle_scripts_1 battle_scripts_2 	contest_ai_scripts event_scripts field_effect_scripts
+ifeq ($(FRLG),1)
+SCRIPT_DATA_SRCS := $(filter-out contest_ai_scripts,$(SCRIPT_DATA_SRCS))
+endif
 SCRIPT_DATA_OBJS := $(patsubst %,build/root/data/%.o,$(SCRIPT_DATA_SRCS))
 ROOT_DATA_SRCS := $(filter-out $(patsubst %,$(ROOT)/data/%.s,$(SCRIPT_DATA_SRCS)),$(ROOT_DATA_SRCS))
 
@@ -68,7 +71,13 @@ FULL_DATA_OBJS += build/root/3ds_script_blob.o build/root/3ds_script_keep.o
 FULL_DATA_OBJS += build/root/3ds_song_blob.o
 BACKEND_SRCS := src/3ds_assets.c src/3ds_map_loader.c src/3ds_compat.c
 BACKEND_SRCS += src/3ds_game_full.c src/3ds_game_bridge.c src/3ds_script_loader.c
+ifeq ($(FRLG),1)
+# What the units FireRed does not have yet provide (3ds_frlg_stubs.c): the
+# bottom screen's interface, the wireless adapter, Hoenn's timed encounters.
+BACKEND_SRCS += src/3ds_frlg_stubs.c
+else
 BACKEND_SRCS += src/3ds_bottom_ui.c
+endif
 # The Pokédex on the top screen: which Pokémon, its picture and terrain.
 BACKEND_SRCS += src/3ds_dex_top_game.c
 # The battle's info boxes at the screen's resolution (3ds_battle_hud.h).
@@ -81,8 +90,10 @@ BACKEND_SRCS += src/3ds_extras.c
 BACKEND_SRCS += src/3ds_nuzlocke_game.c
 # Local wireless play: the emulated Wireless Adapter the game's link code
 # talks to (its radio is src/3ds_local.c).
+ifneq ($(FRLG),1)
 BACKEND_SRCS += src/3ds_rfu_adapter.c
 BACKEND_SRCS += src/3ds_encounter_tables.c
+endif
 # The seeded species randomizer, off by default (include/3ds_randomizer.h).
 BACKEND_SRCS += src/3ds_randomizer.c src/3ds_randomizer_core.c
 # The frame profiler times the engine's own routines through linker wrappers.
@@ -112,6 +123,9 @@ build/bridge/3ds_cycle_test.o: FULLCFLAGS += $(TEST_FLAGS)
 MAP_WRAPPED := MapGridSetMetatileIdAt MapGridSetMetatileEntryAt MapGridSetMetatileImpassabilityAt \
 	InitMap InitMapFromSavedGame SetCurrentMapLayout GenerateBattlePyramidFloorLayout \
 	GenerateTrainerHillFloorLayout CameraMove
+ifeq ($(FRLG),1)
+MAP_WRAPPED := $(filter-out GenerateBattlePyramidFloorLayout GenerateTrainerHillFloorLayout,$(MAP_WRAPPED))
+endif
 LDFLAGS += $(foreach f,$(PROF_WRAPPED) $(SOUND_WRAPPED) $(MAP_WRAPPED),-Wl,--wrap=$(f))
 BACKEND_OBJS := $(patsubst src/%.c,build/bridge/%.o,$(BACKEND_SRCS))
 
@@ -136,7 +150,9 @@ ROMFS_SHADER_OUTS += romfs/voxel/signposts.bin
 ROMFS_SHADER_OUTS += romfs/voxel/buildings.bin
 ROMFS_SHADER_OUTS += romfs/voxel/relief.bin
 # New art around the intro's leaves scene (scripts/gen_intro_margins.py).
+ifneq ($(FRLG),1)
 ROMFS_SHADER_OUTS += romfs/stage/leaves.bin
+endif
 # The bottom screen's battle menus: the port's own art (scripts/gen_battle_art.py).
 ROMFS_SHADER_OUTS += romfs/bottom/battle.bin
 # The bottom screen's menu backdrop: the port's own art (scripts/gen_menu_art.py).
@@ -170,6 +186,27 @@ build/root/%.o: $(ROOT)/%.c Makefile full.mk
 	@sed -e 's# src/# $(abspath $(ROOT))/src/#g' -e 's#^src/#$(abspath $(ROOT))/src/#' $(@:.o=.d.tmp) > $(@:.o=.d)
 	@rm -f $(@:.o=.d.tmp)
 
+ifeq ($(FRLG),1)
+# FireRed (docs/FIRERED_PORT.md, milestone 1): every screen is a GBA screen
+# shown centred (compat/ctr_gba_centred.h); the battle scene and its
+# transitions keep the compositor's battle staging as in Emerald.
+CTR_GBA_BATTLE_SRCS := battle_main battle_bg battle_intro battle_interface battle_gfx_sfx_util \
+	battle_controllers battle_controller_player battle_controller_opponent \
+	battle_controller_link_opponent battle_controller_link_partner battle_controller_safari \
+	battle_controller_oak_old_man battle_controller_pokedude battle_message battle_script_commands \
+	battle_util battle_util2 battle_ai_script_commands battle_ai_switch_items \
+	pokeball reshow_battle_screen evolution_scene evolution_graphics \
+	$(patsubst $(ROOT)/src/%.c,%,$(wildcard $(ROOT)/src/battle_anim*.c))
+CTR_GBA_BATTLE_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_BATTLE_SRCS))
+CTR_GBA_TRANSITION_OBJS := build/root/src/battle_transition.o
+CTR_GBA_CENTRED_OBJS := $(filter-out $(CTR_GBA_BATTLE_OBJS) $(CTR_GBA_TRANSITION_OBJS),$(FULL_C_OBJS))
+$(CTR_GBA_BATTLE_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_battle.h)
+$(CTR_GBA_BATTLE_OBJS): compat/ctr_gba_battle.h $(ROOT)/include/gba/defines.h
+$(CTR_GBA_TRANSITION_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_transition.h)
+$(CTR_GBA_TRANSITION_OBJS): compat/ctr_gba_transition.h $(ROOT)/include/gba/defines.h
+$(CTR_GBA_CENTRED_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_centred.h)
+$(CTR_GBA_CENTRED_OBJS): compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
+else
 # Screens staged as one whole GBA picture: GBA geometry, and their VBlank
 # callbacks reported to the bridge (compat/ctr_gba_stage.h). The cable car too:
 # built wide, its scene sat in a corner of the screen with black around it.
@@ -289,6 +326,8 @@ CTR_GBA_TRANSITION_SRCS := battle_transition battle_transition_frontier
 CTR_GBA_TRANSITION_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_TRANSITION_SRCS))
 $(CTR_GBA_TRANSITION_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_transition.h)
 $(CTR_GBA_TRANSITION_OBJS): compat/ctr_gba_transition.h $(ROOT)/include/gba/defines.h
+endif
+
 # preproc truncates this translation unit to zero bytes (a known tool bug also
 # hit by the DS build). It has no charmap string literals, so it is safe to skip.
 build/root/src/field_camera.o: $(ROOT)/src/field_camera.c Makefile full.mk
@@ -432,7 +471,7 @@ $(ROMFS_SCRIPT_OUTS) &: $(TARGET).elf $(SCRIPT_DATA_OBJS) scripts/gen_script_bun
 $(ROMFS_SOUND_OUTS) &: $(TARGET).elf $(ROOT_SONG_OBJS) scripts/gen_sound_bundle.py
 	@mkdir -p romfs/sound
 	"$(PYTHON)" scripts/gen_sound_bundle.py --port-dir . --bundle --out-dir romfs/sound
-	"$(PYTHON)" scripts/verify_scripts.py --elf $(TARGET).elf --out-dir romfs/sound 		--tag verify_songs --magic C3AB --payload songs.bin --reloc songs.rel 		--blob-symbol __ctr_song_blob --require mus_dummy --require mus_littleroot --song-headers
+	"$(PYTHON)" scripts/verify_scripts.py --elf $(TARGET).elf --out-dir romfs/sound 		--tag verify_songs --magic C3AB --payload songs.bin --reloc songs.rel 		--blob-symbol __ctr_song_blob --require mus_dummy --require $(if $(filter 1,$(FRLG)),mus_pallet,mus_littleroot) --song-headers
 
 # The game's linked read-only data: identical layout in both links, contents
 # from the image, reserved NOLOAD in the executable.
@@ -445,11 +484,12 @@ $(MAPJSON): $(wildcard $(ROOT)/tools/mapjson/*.cpp $(ROOT)/tools/mapjson/*.h)
 	$(MAKE) -C $(ROOT)/tools/mapjson
 
 $(ROOT)/include/constants/map_groups.h: $(ROOT)/data/maps/map_groups.json $(wildcard $(ROOT)/data/maps/*/map.json) | $(MAPJSON)
-	"$(MAPJSON)" groups emerald $< $(ROOT)/data/maps $(ROOT)/include/constants
+	"$(MAPJSON)" groups $(MAPJSON_GAME) $< $(ROOT)/data/maps $(ROOT)/include/constants
 
 $(ROOT)/include/constants/layouts.h: $(ROOT)/data/layouts/layouts.json | $(MAPJSON)
-	"$(MAPJSON)" layouts emerald $< $(ROOT)/data/layouts $(ROOT)/include/constants
+	"$(MAPJSON)" layouts $(MAPJSON_GAME) $< $(ROOT)/data/layouts $(ROOT)/include/constants
 
+MAPJSON_GAME := $(if $(filter 1,$(FRLG)),firered,emerald)
 HOST_MAP_HEADERS := $(ROOT)/include/constants/map_groups.h $(ROOT)/include/constants/layouts.h
 
 .PHONY: map-includes
@@ -806,7 +846,9 @@ verify-voxel-dewford:
 # the shipped data (scripts/voxel_engine_view.py check, tests/voxel_scene_dump.c):
 # chunks that would refuse triangles, static models over their memory. A
 # warning for now - the report is build/voxel_check.report.
+ifneq ($(FRLG),1)
 all: build/voxel_check.report
+endif
 build/voxel_check.report: romfs/voxel/buildings.bin romfs/voxel/relief.bin romfs/voxel/regions.bin 		romfs/voxel/signposts.bin scripts/voxel_engine_view.py tests/voxel_scene_dump.c 		$(wildcard src/voxel/voxel_*.c) $(wildcard src/voxel/voxel_*.h)
 	@mkdir -p $(@D)
 	@"$(PYTHON)" scripts/voxel_engine_view.py check > $@ 2>&1 		&& echo "voxel check: ok" 		|| { echo "voxel check: WARNING, see $@"; grep -E "DROPS|OVER|failed" $@ || true; }

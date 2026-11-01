@@ -26,10 +26,17 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define CTR_DATA_DIR "sdmc:/3ds/emerald3ds/"
-#define CTR_DATA_PAK_PATH CTR_DATA_DIR "emerald3ds.pak"
+/* The app's name on the SD card: its folder, save, pack and companions. The
+ * FireRed build passes its own (Makefile, GAME=firered), so it never meets an
+ * Emerald 3DS install's files. */
+#ifndef CTR_APP_NAME
+#define CTR_APP_NAME "emerald3ds"
+#endif
+#define CTR_SD_ROOT "sdmc:/3ds/" CTR_APP_NAME
+#define CTR_DATA_DIR CTR_SD_ROOT "/"
+#define CTR_DATA_PAK_PATH CTR_DATA_DIR CTR_APP_NAME ".pak"
 #define CTR_DATA_LOOSE_DIR CTR_DATA_DIR "devdata/"
-#define CTR_DATA_LOOSE_MARKER CTR_DATA_LOOSE_DIR ".emerald3ds-dev"
+#define CTR_DATA_LOOSE_MARKER CTR_DATA_LOOSE_DIR "." CTR_APP_NAME "-dev"
 /* Present in the RomFS of a build that embeds its game data. */
 #define CTR_DATA_EMBEDDED_MARKER "romfs:/data.embedded"
 

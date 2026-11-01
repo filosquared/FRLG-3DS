@@ -35,7 +35,7 @@ def main() -> None:
             [
                 str(MAPJSON),
                 "map",
-                "emerald",
+                "firered" if (ROOT / "firered.sha1").exists() else "emerald",
                 str(map_json),
                 str(LAYOUTS_JSON),
                 str(out_dir),

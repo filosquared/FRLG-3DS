@@ -683,7 +683,12 @@ static float SpriteScale(const struct Sprite *sprite)
 
     if (!(sprite->oam.affineMode & ST_OAM_AFFINE_ON_MASK))
         return 1.0f;
+#ifdef CTR_FRLG
+    /* FRLG: sprite.h has no OAM_MATRIX_COUNT; the OAM's 32 matrices. */
+    a = (s16)gOamMatrices[sprite->oam.matrixNum & 31].a;
+#else
     a = (s16)gOamMatrices[sprite->oam.matrixNum & (OAM_MATRIX_COUNT - 1)].a;
+#endif
     return a > 0 ? 256.0f / a : 1.0f;
 }
 
@@ -1677,9 +1682,16 @@ unsigned VoxelEntities_Emit(VoxelBuilder *builder, uint16_t *atlas, const VoxelC
         /* Not drawn this frame: logged, at most every ten seconds. */
         static uint32_t sLastFull;
 
-        if (sLastFull == 0 || gMain.vblankCounter1 - sLastFull >= 600)
+#ifdef CTR_FRLG
+        /* FRLG: vblankCounter1 is a pointer there; vblankCounter2 counts every VBlank. */
+        uint32_t now = gMain.vblankCounter2;
+#else
+        uint32_t now = gMain.vblankCounter1;
+#endif
+
+        if (sLastFull == 0 || now - sLastFull >= 600)
         {
-            sLastFull = gMain.vblankCounter1 ? gMain.vblankCounter1 : 1;
+            sLastFull = now ? now : 1;
             CtrLog_Write(CTR_LOG_VIDEO, "VOXEL sprite slots full: %u in sight left out, lowest priority first",
                          dropped);
         }

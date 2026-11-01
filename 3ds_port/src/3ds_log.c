@@ -1,4 +1,5 @@
 #include <3ds.h>
+#include "3ds_data.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -256,7 +257,7 @@ void CtrLog_Init(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     mkdir("sdmc:/3ds", 0777);
-    mkdir("sdmc:/3ds/emerald3ds", 0777);
+    mkdir(CTR_SD_ROOT, 0777);
     LightLock_Init(&sLock);
     LightLock_Init(&sDrainLock);
     LightLock_Init(&sConsoleLock);
@@ -269,17 +270,17 @@ void CtrLog_Init(void)
      * pay for SD writes; to diagnose, create that file (any content). */
     sFile = NULL;
     {
-        FILE *marker = fopen("sdmc:/3ds/emerald3ds/debug.txt", "r");
+        FILE *marker = fopen(CTR_DATA_DIR "debug.txt", "r");
 
         if (marker != NULL)
         {
             fclose(marker);
-            remove("sdmc:/3ds/emerald3ds/port-prev.log");
-            rename("sdmc:/3ds/emerald3ds/port.log", "sdmc:/3ds/emerald3ds/port-prev.log");
-            sFile = fopen("sdmc:/3ds/emerald3ds/port.log", "w");
-            remove("sdmc:/3ds/emerald3ds/perf-prev.bin");
-            rename("sdmc:/3ds/emerald3ds/perf.bin", "sdmc:/3ds/emerald3ds/perf-prev.bin");
-            sBinFile = sFile != NULL ? fopen("sdmc:/3ds/emerald3ds/perf.bin", "wb") : NULL;
+            remove(CTR_DATA_DIR "port-prev.log");
+            rename(CTR_DATA_DIR "port.log", CTR_DATA_DIR "port-prev.log");
+            sFile = fopen(CTR_DATA_DIR "port.log", "w");
+            remove(CTR_DATA_DIR "perf-prev.bin");
+            rename(CTR_DATA_DIR "perf.bin", CTR_DATA_DIR "perf-prev.bin");
+            sBinFile = sFile != NULL ? fopen(CTR_DATA_DIR "perf.bin", "wb") : NULL;
         }
     }
     sBinHead = sBinTail = sBinDropped = 0;

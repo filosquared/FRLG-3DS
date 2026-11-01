@@ -23,6 +23,15 @@
 #include "gba/flash_internal.h"
 #include "characters.h"
 
+#ifndef CHAR_A_TILDE
+/* FRLG: the PT-BR tilde slots (Emerald 3DS patch 0057) are not in FireRed's
+ * characters.h; the slots are blank in its fonts too, so compose them the same. */
+#define CHAR_A_TILDE 0x2F
+#define CHAR_O_TILDE 0x30
+#define CHAR_a_TILDE 0x31
+#define CHAR_o_TILDE 0x32
+#endif
+
 /*
  * global.h redirects these four GBA registers to RAM under the bridge; this is
  * the storage the emulated registers live in, shared by every translation unit
@@ -140,6 +149,24 @@ void Port_RecordMainLoopIteration(void)
 
 /* ── Latin fonts ────────────────────────────────────────────────────────── */
 
+#ifdef CTR_FRLG
+/*
+ * FRLG: FireRed's fonts (text.c) are Small, Normal (and its copy, the same
+ * file), Male and Female, all 16x16 glyphs of 0x40 bytes like Emerald's. The
+ * port build of text.c exports them under these names (PORT_BRIDGE), as
+ * Emerald's fonts.c does. Port_LatinGlyph's index is this table's order.
+ */
+extern const u16 gFontSmallLatinGlyphs[];
+extern const u16 gFontNormalCopy1LatinGlyphs[];
+extern const u16 gFontNormalLatinGlyphs[];
+extern const u16 gFontMaleLatinGlyphs[];
+extern const u16 gFontFemaleLatinGlyphs[];
+extern const u8 gFontSmallLatinGlyphWidths[];
+extern const u8 gFontNormalCopy1LatinGlyphWidths[];
+extern const u8 gFontNormalLatinGlyphWidths[];
+extern const u8 gFontMaleLatinGlyphWidths[];
+extern const u8 gFontFemaleLatinGlyphWidths[];
+#else
 extern const u16 gFontSmallNarrowLatinGlyphs[];
 extern const u16 gFontSmallLatinGlyphs[];
 extern const u16 gFontNarrowLatinGlyphs[];
@@ -150,6 +177,7 @@ extern const u16 gFontSmallJapaneseGlyphs[];
 extern const u16 gFontNormalJapaneseGlyphs[];
 extern const u16 gFontShortJapaneseGlyphs[];
 #endif
+#endif /* CTR_FRLG */
 
 /*
  * The stubs of the five latin fonts are packed almost back to back, so an
@@ -163,7 +191,13 @@ static struct
     u8 *raw;
     u32 size;
 } sLatinFonts[] = {
-#if GAME_LANGUAGE != LANGUAGE_JAPANESE
+#ifdef CTR_FRLG
+    { gFontSmallLatinGlyphs,       "graphics/fonts/latin_small.hwlatfont",  NULL, 0 },
+    { gFontNormalCopy1LatinGlyphs, "graphics/fonts/latin_normal.fwlatfont", NULL, 0 },
+    { gFontNormalLatinGlyphs,      "graphics/fonts/latin_normal.fwlatfont", NULL, 0 },
+    { gFontMaleLatinGlyphs,        "graphics/fonts/latin_male.fwlatfont",   NULL, 0 },
+    { gFontFemaleLatinGlyphs,      "graphics/fonts/latin_female.fwlatfont", NULL, 0 },
+#elif GAME_LANGUAGE != LANGUAGE_JAPANESE
     { gFontSmallNarrowLatinGlyphs, "graphics/fonts/small_narrow.latfont", NULL, 0 },
     { gFontSmallLatinGlyphs,       "graphics/fonts/small.latfont",        NULL, 0 },
     { gFontNarrowLatinGlyphs,      "graphics/fonts/narrow.latfont",       NULL, 0 },
@@ -179,6 +213,12 @@ static struct
 };
 
 #if GAME_LANGUAGE != LANGUAGE_JAPANESE
+#ifdef CTR_FRLG
+static const u8 *const sLatinFontWidths[] = {
+    gFontSmallLatinGlyphWidths, gFontNormalCopy1LatinGlyphWidths, gFontNormalLatinGlyphWidths,
+    gFontMaleLatinGlyphWidths, gFontFemaleLatinGlyphWidths,
+};
+#else
 extern const u8 gFontSmallNarrowLatinGlyphWidths[];
 extern const u8 gFontSmallLatinGlyphWidths[];
 extern const u8 gFontNarrowLatinGlyphWidths[];
@@ -189,6 +229,7 @@ static const u8 *const sLatinFontWidths[] = {
     gFontSmallNarrowLatinGlyphWidths, gFontSmallLatinGlyphWidths, gFontNarrowLatinGlyphWidths,
     gFontShortLatinGlyphWidths, gFontNormalLatinGlyphWidths,
 };
+#endif
 
 /*
  * A glyph is 16x16 pixels of 2 bits in four 8x8 tiles (top left, top right,
@@ -365,7 +406,7 @@ void Port_PreloadLatinFonts(void)
  * The directory is created by CtrFs_Init, which runs before the game starts.
  */
 
-#define CTR_SAVE_PATH CTR_DATA_DIR "emerald3ds.sav"
+#define CTR_SAVE_PATH CTR_DATA_DIR CTR_APP_NAME ".sav"
 /* Where earlier builds kept the save; moved once on first start. */
 #define CTR_OLD_SAVE_PATH "sdmc:/3ds/pokeemerald/pokeemerald.sav"
 /* Bytes accepted after the 128 KiB flash: mGBA's clock footer is 16. */
@@ -382,8 +423,10 @@ static void MigrateOldSave(void)
         fclose(probe);
         return;
     }
+#ifndef CTR_FRLG /* FRLG: the old path holds an Emerald save, never FireRed's */
     if (rename(CTR_OLD_SAVE_PATH, CTR_SAVE_PATH) == 0)
         CtrLog_Write(CTR_LOG_FS, "save moved from %s", CTR_OLD_SAVE_PATH);
+#endif
 }
 
 void Port_SaveInit(void)

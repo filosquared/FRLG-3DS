@@ -21,6 +21,7 @@
  * it is named in the log instead of being measured as if it were the same.
  */
 #include <3ds.h>
+#include "3ds_data.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,7 +30,7 @@
 
 #include "3ds_platform.h"
 
-#define DIR "sdmc:/3ds/emerald3ds/"
+#define DIR CTR_DATA_DIR ""
 #define CHECK_EVERY 600
 #define CHECKS 512
 #define INPUT_MAGIC 0x4e493345u   /* "E3IN" */
@@ -104,7 +105,7 @@ static void StartRecording(void)
     mkdir(path, 0777);
     PathOf(path, sizeof(path), "save.sav");
     remove(path);
-    bool saved = CopyFile(DIR "emerald3ds.sav", path);
+    bool saved = CopyFile(DIR CTR_APP_NAME ".sav", path);
     PathOf(path, sizeof(path), "input.bin");
     sInput = fopen(path, "wb");
     if (sInput == NULL || fwrite(header, sizeof(header), 1, sInput) != 1)

@@ -10,9 +10,9 @@
 #include "3ds_data.h"
 #include "3ds_platform.h"
 
-#define NUZ_FILE "emerald3ds.nuzlocke"
-#define NUZ_TEMP "emerald3ds.nuzlocke.tmp"
-#define NUZ_BACKUP "emerald3ds.nuzlocke.bak"
+#define NUZ_FILE CTR_APP_NAME ".nuzlocke"
+#define NUZ_TEMP CTR_APP_NAME ".nuzlocke.tmp"
+#define NUZ_BACKUP CTR_APP_NAME ".nuzlocke.bak"
 
 /* 0: read and valid; -1: absent; -2: present but not a valid record. */
 static int ReadRecord(const char *name, CtrNuzState *state, uint32_t *saveCrc, uint32_t *saveSize)

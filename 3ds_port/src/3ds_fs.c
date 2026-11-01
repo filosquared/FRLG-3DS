@@ -1,4 +1,5 @@
 #include <3ds.h>
+#include "3ds_data.h"
 #include <errno.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -55,7 +56,7 @@ bool CtrFs_Init(void)
         return false;
     }
     mkdir("sdmc:/3ds", 0777);
-    mkdir("sdmc:/3ds/emerald3ds", 0777);
+    mkdir(CTR_SD_ROOT, 0777);
     FILE *file = CtrFs_OpenAsset("boot.txt");
     char contents[64] = {0};
     bool valid = file && fgets(contents, sizeof(contents), file)
@@ -85,5 +86,5 @@ FILE *CtrFs_OpenAsset(const char *relativePath)
 
 FILE *CtrFs_OpenData(const char *relativePath, const char *mode)
 {
-    return Open("sdmc:/3ds/emerald3ds/", relativePath, mode);
+    return Open(CTR_DATA_DIR "", relativePath, mode);
 }

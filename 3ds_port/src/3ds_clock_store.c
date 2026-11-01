@@ -8,9 +8,9 @@
 #include "3ds_pak.h"
 #include "3ds_platform.h"
 
-#define CLOCK_FILE "emerald3ds.clock"
-#define CLOCK_TEMP "emerald3ds.clock.tmp"
-#define CLOCK_BACKUP "emerald3ds.clock.bak"
+#define CLOCK_FILE CTR_APP_NAME ".clock"
+#define CLOCK_TEMP CTR_APP_NAME ".clock.tmp"
+#define CLOCK_BACKUP CTR_APP_NAME ".clock.bak"
 #define CLOCK_BYTES 40u
 
 static void WriteNumber(unsigned char *bytes, uint64_t value, unsigned size)

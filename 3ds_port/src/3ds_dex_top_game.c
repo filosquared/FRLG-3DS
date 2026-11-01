@@ -11,6 +11,19 @@
  */
 #include <string.h>
 
+#ifdef CTR_FRLG
+/*
+ * FRLG: FireRed's Pokédex (pokedex_screen.c) has no CtrPokedex_* hooks yet
+ * (Emerald's patch 0058 is for pokedex.c), so the top screen's Pokédex window
+ * never opens: the frame hook does nothing and the 3D view stays as it is.
+ */
+#include "3ds_dex_top.h"
+
+void CtrDexTopGame_Frame(void)
+{
+}
+#else
+
 #include "global.h"
 #include "main.h"
 #include "data.h"
@@ -257,3 +270,4 @@ void CtrDexTopGame_Frame(void)
         Show(national);
     }
 }
+#endif /* CTR_FRLG */

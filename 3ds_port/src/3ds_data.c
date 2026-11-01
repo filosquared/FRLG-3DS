@@ -155,15 +155,15 @@ static bool OpenPak(void)
                  CTR_TEXT_PT_DE("Run the builder that came with this\n"
                              "release with your own Pokemon Emerald\n"
                              "ROM and install the data pack to:\n\n"
-                             "  /3ds/emerald3ds/emerald3ds.pak",
+                             "  /3ds/" CTR_APP_NAME "/" CTR_APP_NAME ".pak",
                              "Rode o builder que veio com esta\n"
                              "versao com a sua ROM de Pokemon\n"
                              "Emerald e instale o pacote em:\n\n"
-                             "  /3ds/emerald3ds/emerald3ds.pak",
+                             "  /3ds/" CTR_APP_NAME "/" CTR_APP_NAME ".pak",
                              "Starte den Builder dieser Version\n"
                              "mit deinem eigenen Smaragd-ROM und\n"
                              "installiere das Datenpaket nach:\n\n"
-                             "  /3ds/emerald3ds/emerald3ds.pak"));
+                             "  /3ds/" CTR_APP_NAME "/" CTR_APP_NAME ".pak"));
         return false;
     }
     setvbuf(sPak, NULL, _IOFBF, 64 * 1024);
@@ -175,11 +175,11 @@ static bool OpenPak(void)
         break;
     case CTR_PAK_BAD_MAGIC:
         SetError(CTR_TEXT("This is not a game data pack.", "This is not a game data pack.", "This is not a game data pack.", "This is not a game data pack.", "Isto nao e um pacote de dados.", "Das ist kein Datenpaket des Spiels.", "This is not a game data pack."),
-                 CTR_TEXT_PT_DE("/3ds/emerald3ds/emerald3ds.pak is not a\n"
+                 CTR_TEXT_PT_DE("/3ds/" CTR_APP_NAME "/" CTR_APP_NAME ".pak is not a\n"
                              "data pack. Run the builder again.",
-                             "/3ds/emerald3ds/emerald3ds.pak nao e um\n"
+                             "/3ds/" CTR_APP_NAME "/" CTR_APP_NAME ".pak nao e um\n"
                              "pacote de dados. Rode o builder de novo.",
-                             "/3ds/emerald3ds/emerald3ds.pak ist kein\n"
+                             "/3ds/" CTR_APP_NAME "/" CTR_APP_NAME ".pak ist kein\n"
                              "Datenpaket. Starte den Builder erneut."));
         goto fail;
     case CTR_PAK_BAD_SCHEMA:
@@ -267,7 +267,7 @@ bool CtrData_Init(void)
 
     ReadEngineAbi();
     mkdir("sdmc:/3ds", 0777);
-    mkdir("sdmc:/3ds/emerald3ds", 0777);
+    mkdir(CTR_SD_ROOT, 0777);
     if (choice == 0)
     {
         if (FileExists(CTR_DATA_LOOSE_MARKER))

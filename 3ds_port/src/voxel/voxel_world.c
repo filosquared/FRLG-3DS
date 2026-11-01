@@ -13,7 +13,9 @@
 #include "main.h"
 #include "overworld.h"
 #include "event_data.h"
+#ifndef CTR_FRLG
 #include "time_events.h"
+#endif
 #include "constants/layouts.h"
 #include "fieldmap.h"
 #include "decompress.h"
@@ -25,6 +27,9 @@
 #include "constants/maps.h"
 #include "constants/metatile_behaviors.h"
 #include "port_platform.h"
+#ifdef CTR_FRLG
+#include "3ds_platform.h" /* CB2_Overworld */
+#endif
 
 #include "voxel_world.h"
 #include "voxel_regions.h"
@@ -41,8 +46,14 @@
 #endif
 
 extern const struct Tileset gTileset_General;
+#ifdef CTR_FRLG
+/* FRLG: a metatile's attributes are 32 bits (fieldmap.c's masks). */
+#define UNPACK_BEHAVIOR(attr) ((attr) & 0x1FF)
+#define UNPACK_LAYER_TYPE(attr) (((attr) & 0x60000000) >> 29)
+#else
 extern const struct Tileset gTileset_Fortree;
 extern const struct Tileset gTileset_GenericBuilding;
+#endif
 
 #include <string.h>
 
@@ -126,7 +137,7 @@ const uint16_t *Voxel_ResolveMetatiles(const void *tilesetPtr)
  * memo a mesh rebuild spends more time finding the attribute table than
  * reading it.
  */
-const uint16_t *Voxel_ResolveAttributes(const void *tilesetPtr)
+const VoxelMetatileAttr *Voxel_ResolveAttributes(const void *tilesetPtr)
 {
     const struct Tileset *tileset = tilesetPtr;
     const void *resolved;
@@ -271,6 +282,7 @@ bool VoxelWorld_IsBattleMapAvailable(void)
  * crossed into the route. `swapped` says, as the script does, whether the
  * map is entered with `layoutId`; NULL: always.
  */
+#ifndef CTR_FRLG
 static bool MirageTowerHidden(void)
 {
     return !FlagGet(FLAG_MIRAGE_TOWER_VISIBLE);
@@ -292,13 +304,23 @@ static const struct
     { MAP_GROUP(MAP_ROUTE131), MAP_NUM(MAP_ROUTE131), NULL, LAYOUT_ROUTE131_SKY_PILLAR },
 };
 
+#endif
+
 static u16 NeighbourLayoutId(const struct MapHeader *header, int mapGroup, int mapNum)
 {
+#ifdef CTR_FRLG
+    /* FRLG: FireRed swaps layouts only inside maps without connections
+     * (Seafoam Islands, Dunsparce Tunnel, a Seven Island house), never in
+     * one drawn as a neighbour. */
+    (void)mapGroup;
+    (void)mapNum;
+#else
     for (unsigned i = 0; i < ARRAY_COUNT(sLayoutSwaps); ++i)
         if (sLayoutSwaps[i].mapGroup == mapGroup && sLayoutSwaps[i].mapNum == mapNum
          && (sLayoutSwaps[i].swapped == NULL || sLayoutSwaps[i].swapped())
          && Port_GetMapLayoutById(sLayoutSwaps[i].layoutId) != NULL)
             return sLayoutSwaps[i].layoutId;
+#endif
     return header->mapLayoutId;
 }
 
@@ -665,9 +687,9 @@ unsigned VoxelWorld_GetCollision(int worldX, int worldY)
     return (GetRawBlock(worldX, worldY, NULL) & MAPGRID_COLLISION_MASK) >> MAPGRID_COLLISION_SHIFT;
 }
 
-static u16 GetMetatileAttribute(const VoxelMapInstance *inst, int metatileId)
+static VoxelMetatileAttr GetMetatileAttribute(const VoxelMapInstance *inst, int metatileId)
 {
-    const uint16_t *attributes;
+    const VoxelMetatileAttr *attributes;
     unsigned index;
 
     if (inst == NULL)
@@ -709,6 +731,7 @@ bool VoxelWorld_IsVisibleReflectiveSurface(int worldX, int worldY)
      * the GBA shows a walker's reflection under the bridge, in the water the
      * planks hide; here the deck is no water surface, and a reflection laid
      * on it was drawn over the planks. The water beside it still reflects. */
+#ifndef CTR_FRLG /* FRLG: no MB_REFLECTION_UNDER_BRIDGE, no Fortree */
     if (behavior == MB_REFLECTION_UNDER_BRIDGE)
         return false;
 
@@ -719,6 +742,7 @@ bool VoxelWorld_IsVisibleReflectiveSurface(int worldX, int worldY)
     if (behavior == MB_PUDDLE && inst->secondaryTileset == &gTileset_Fortree
      && metatileId >= 0x288 && metatileId <= 0x29A)
         return false;
+#endif
     return true;
 }
 
@@ -822,6 +846,21 @@ bool VoxelWorld_UsesTreeSprites(const VoxelMapInstance *inst)
  */
 static VoxelVisualShape BehaviorShape(u8 behavior)
 {
+#ifdef CTR_FRLG
+    /* FRLG: FireRed's predicates; it has no secret bases, bridge reflections
+     * or Emerald's player-room PC and cable box. */
+    if (MetatileBehavior_IsSurfable(behavior)
+     || MetatileBehavior_IsPuddle(behavior)
+     || MetatileBehavior_IsShallowFlowingWater(behavior)
+     || behavior == MB_HOT_SPRINGS)
+        return VOXEL_SHAPE_WATER;
+    if (MetatileBehavior_IsCounter(behavior))
+        return VOXEL_SHAPE_COUNTER;
+    if (MetatileBehavior_IsPC(behavior)
+     || behavior == MB_TELEVISION)
+        return VOXEL_SHAPE_FURNITURE;
+    return VOXEL_SHAPE_COUNT;
+#else
     if (MetatileBehavior_IsSurfableWaterOrUnderwater(behavior)
      || MetatileBehavior_IsPuddle(behavior)
      || MetatileBehavior_IsShallowFlowingWater(behavior)
@@ -838,6 +877,7 @@ static VoxelVisualShape BehaviorShape(u8 behavior)
      || behavior == MB_CABLE_BOX_RESULTS_1)
         return VOXEL_SHAPE_FURNITURE;
     return VOXEL_SHAPE_COUNT;
+#endif
 }
 
 VoxelVisualShape VoxelWorld_ClassifyTile(int worldX, int worldY)
@@ -993,9 +1033,16 @@ float VoxelWorld_WeatherAmount(void)
 float VoxelWorld_Lightning(void)
 {
 #ifdef PLATFORM_3DS
+#ifdef CTR_FRLG
+    /* FRLG: the same colour maps, under FireRed's older name. */
+    if (GetCurrentWeather() != WEATHER_RAIN_THUNDERSTORM || gWeatherPtr->gammaIndex <= 3)
+        return 0.0f;
+    return gWeatherPtr->gammaIndex >= 19 ? 1.0f : (float)(gWeatherPtr->gammaIndex - 3) / 16.0f;
+#else
     if (GetCurrentWeather() != WEATHER_RAIN_THUNDERSTORM || gWeatherPtr->colorMapIndex <= 3)
         return 0.0f;
     return gWeatherPtr->colorMapIndex >= 19 ? 1.0f : (float)(gWeatherPtr->colorMapIndex - 3) / 16.0f;
+#endif
 #else
     return 0.0f;
 #endif

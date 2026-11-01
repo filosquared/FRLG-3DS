@@ -10,6 +10,7 @@
 
 /* Before the game's headers, whose global.h defines abs and friends. */
 #include <setjmp.h>
+#include "3ds_data.h"
 #include <stdlib.h>
 
 #include "global.h"
@@ -25,11 +26,17 @@
 #include "item_menu.h"
 #include "party_menu.h"
 #include "battle_main.h"
+#ifdef CTR_FRLG
+#include "fldeff.h"
+#else
 #include "fldeff_misc.h"
+#endif
 #include "field_effect.h"
 #include "constants/field_effects.h"
+#ifndef CTR_FRLG
 #include "battle_pyramid.h"
 #include "rtc.h"
+#endif
 #include "constants/map_types.h"
 #include "sprite.h"
 #include "palette.h"
@@ -65,6 +72,11 @@
 #include "script_pokemon_util.h"
 #endif
 #include "librfu.h"
+#ifdef CTR_FRLG
+#include <time.h>
+/* The emulated Wireless Adapter's frame (3ds_frlg_stubs.c until FireRed has one). */
+void PortRfu_Frame(void);
+#endif
 #ifdef CTR_TEST_SWOOP
 #include "field_screen_effect.h"
 #include "script.h"
@@ -605,7 +617,11 @@ static bool CaptureFieldLight(const struct ScanlineEffect *effect, bool active)
 
     if (!active || effect->dmaDest != &REG_WIN0H || ((effect->dmaControl >> 16) & DMA_32BIT)
      || sTransition.on || gSaveBlock1Ptr == NULL || gMapHeader.mapLayout == NULL
+#ifdef CTR_FRLG
+     || gSaveBlock1Ptr->flashLevel == 0
+#else
      || (gSaveBlock1Ptr->flashLevel == 0 && !InBattlePyramid_())
+#endif
      || gPlayerAvatar.spriteId >= MAX_SPRITES)
         return false;
     /* Both buffers hold the same circle once the radius settles; the one the
@@ -680,7 +696,10 @@ bool CtrGame_FieldRawVram(void)
 {
     return FieldEffectActiveListContains(FLDEFF_FIELD_MOVE_SHOW_MON)
         || FieldEffectActiveListContains(FLDEFF_FIELD_MOVE_SHOW_MON_INIT)
-        || FieldEffectActiveListContains(FLDEFF_RAYQUAZA_SPOTLIGHT);
+#ifndef CTR_FRLG
+        || FieldEffectActiveListContains(FLDEFF_RAYQUAZA_SPOTLIGHT)
+#endif
+        ;
 }
 
 bool CtrGame_IsOverworld(void)
@@ -706,6 +725,22 @@ bool CtrGame_IsOutdoor(void)
     }
 }
 
+#ifdef CTR_FRLG
+/* FRLG: no cartridge RTC (the save keeps only the play time), so the clock
+ * options run on the 3DS's own local time. */
+bool CtrGame_LocalTimeSeconds(unsigned *seconds)
+{
+    time_t now = (time_t)CtrPlatform_WallSeconds();
+    struct tm local;
+
+    if (gSaveBlock2Ptr == NULL || gMapHeader.mapLayout == NULL)
+        return false;
+    if (!localtime_r(&now, &local))
+        return false;
+    *seconds = (unsigned)local.tm_hour * 3600u + (unsigned)local.tm_min * 60u + (unsigned)local.tm_sec;
+    return true;
+}
+#else
 bool CtrGame_LocalTimeSeconds(unsigned *seconds)
 {
     /* RtcGetInfo leaves rtc unwritten when the RTC call fails (locked):
@@ -725,6 +760,8 @@ bool CtrGame_LocalTimeSeconds(unsigned *seconds)
     *seconds = local.hours * 3600u + local.minutes * 60u + local.seconds;
     return true;
 }
+
+#endif /* CTR_FRLG */
 
 /* The poison step's effect is running (see DrawPoisonVeil in 3ds_video.c). */
 bool CtrGame_FieldPoison(void)
@@ -1014,7 +1051,7 @@ static void TestExtSpriteDestroy(void)
  * first mon), "fade" (the fade cycle now) and "auto 0/1" (the fade cycle every
  * ten seconds off/on). True when the command takes the player's controls.
  */
-#define TEST_EXT_COMMANDS "sdmc:/3ds/emerald3ds/ext_test.txt"
+#define TEST_EXT_COMMANDS CTR_DATA_DIR "ext_test.txt"
 static bool8 sTestExtAuto = TRUE;
 
 static bool TestExtCommand(void)
@@ -1192,7 +1229,7 @@ static void MeasureAid(void)
             file = fopen(line, "r");
         }
         if (file == NULL)
-            file = fopen("sdmc:/3ds/emerald3ds/measure.txt", "r");
+            file = fopen(CTR_DATA_DIR "measure.txt", "r");
         while (file != NULL && sCount < ARRAY_COUNT(sSteps) && fgets(line, sizeof(line), file))
         {
             if (sscanf(line, "%u warp %u %u %u %u", &f, &g, &n, &x, &y) == 5)

@@ -64,6 +64,23 @@ LIBS := -lcitro2d -lcitro3d $(LIBS)
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 GAMEFLAGS := -DPORTABLE -DPLATFORM_3DS -D__3DS__ -DMODERN=1 -DUBFIX -D__INTELLISENSE__
 GAMEFLAGS += -iquote include -iquote ../include -iquote ../include/constants -iquote ..
+# Which game the tree holds (tools/bootstrap.py --game): a pret/pokefirered
+# tree is FireRed (docs/FIRERED_PORT.md); GAME=leafgreen and GAME_REVISION=1
+# choose the other cartridges it builds.
+GAME ?= $(if $(wildcard ../firered.sha1),firered,emerald)
+ifneq ($(filter firered leafgreen,$(GAME)),)
+FRLG := 1
+GAME_REVISION ?= 0
+GAME_VERSION := $(if $(filter leafgreen,$(GAME)),LEAFGREEN,FIRERED)
+GAMEFLAGS += -DCTR_FRLG=1 -D$(GAME_VERSION) -DREVISION=$(GAME_REVISION) -DENGLISH
+CPPFLAGS += -DCTR_FRLG=1 -DCTR_APP_NAME='"$(GAME)3ds"'
+GAMEFLAGS += -DCTR_APP_NAME='"$(GAME)3ds"'
+APP_TITLE := $(if $(filter leafgreen,$(GAME)),LeafGreen,FireRed) 3DS
+APP_FILE := $(if $(filter leafgreen,$(GAME)),LeafGreen,FireRed)3DS
+APP_AUTHOR := Zallax, FireRed port by filosquared
+else ifneq ($(GAME),emerald)
+$(error GAME must be emerald, firered or leafgreen)
+endif
 # Baked clock-driven lighting and contact shadows, targeting Old 3DS.
 VOXEL_LIGHTING ?= 1
 ifneq ($(VOXEL_LIGHTING),0)

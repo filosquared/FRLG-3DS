@@ -683,7 +683,7 @@ static void PlateDiskScan(void)
     FILE *file = NULL;
 
     /* None yet: not an error, the first session's. */
-    if (stat("sdmc:/3ds/emerald3ds/" PLATE_DISK_FILE, &st) == 0)
+    if (stat(CTR_DATA_DIR "" PLATE_DISK_FILE, &st) == 0)
     {
         file = CtrFs_OpenData(PLATE_DISK_FILE, "r+b");
         size = (u32)st.st_size;

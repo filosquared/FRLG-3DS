@@ -12,6 +12,7 @@
  * are not saved, and the game is never saved.
  */
 #include <stdio.h>
+#include "3ds_data.h"
 #include "global.h"
 #include "main.h"
 #include "battle.h"
@@ -134,7 +135,7 @@ u32 vramSpaceFree(void);
 
 static void BattleTestConfig(void)
 {
-    FILE *file = fopen("sdmc:/3ds/emerald3ds/battletest.txt", "r");
+    FILE *file = fopen(CTR_DATA_DIR "battletest.txt", "r");
     char line[64];
 
     sConfigRead = TRUE;

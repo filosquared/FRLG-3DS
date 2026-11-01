@@ -169,6 +169,11 @@ void CtrGame_SoftReset(void);
 void CtrGame_VBlank(void);
 /* The field is on screen (CB2_Overworld), whichever way it is drawn. */
 bool CtrGame_IsOverworld(void);
+#ifdef CTR_FRLG
+/* FRLG: static in pokefirered's overworld.c; the port build exports it there
+ * (PORT_BRIDGE) so the port can tell the running field as in Emerald. */
+void CB2_Overworld(void);
+#endif
 bool CtrGame_IsOutdoor(void);
 bool CtrGame_LocalTimeSeconds(unsigned *seconds);
 /* A field effect is storing into VRAM directly (not through a copy). */
