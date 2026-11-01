@@ -69,3 +69,31 @@ const struct WildPokemonInfo *CtrEncounters_Land(const struct WildPokemonInfo *o
     (void)mapNum;
     return original;
 }
+
+/* ---- Emerald's screens the compositor asks about ---------------------------
+ * The Rayquaza title background, the PokéNav's list, Emerald's Pokédex pages:
+ * FireRed has none of them, so the compositor treats them as never on show. */
+
+int CtrTitleScreen_RayquazaBg(void) { return -1; }
+int CtrPokenavList_Bg(void) { return -1; }
+bool8 CtrPokedex_IsCaughtMonPage(void) { return FALSE; }
+int CtrPokedex_Backdrop(void) { return -1; }
+/* The 3D battle's camera glide waits for the scenery to slide in; until
+ * battle_intro.c reports FireRed's slide, the 3D battle starts at once. */
+bool8 CtrBattleIntro_Sliding(void) { return FALSE; }
+
+/* ---- the voxel world's doors (Emerald's field_door.c, patch 0038) ---------- */
+
+bool8 PortDoor_Get(s16 *x, s16 *y, u8 *width, const u8 **tiles, const u8 **palettes)
+{
+    (void)x; (void)y; (void)width; (void)tiles; (void)palettes;
+    return FALSE;
+}
+bool8 PortDoor_GetTwin(s16 *x, s16 *y) { (void)x; (void)y; return FALSE; }
+
+/* ---- Hoenn's tilesets the voxel trees special-case (voxel_tree.c) ----------
+ * Distinct objects no map uses, so none of Hoenn's cases match in Kanto. */
+#include "fieldmap.h"
+const struct Tileset gTileset_Dewford, gTileset_Fortree, gTileset_Mauville, gTileset_Lavaridge,
+    gTileset_Rustboro, gTileset_Lilycove, gTileset_EverGrande, gTileset_BattleFrontierOutsideWest,
+    gTileset_Mossdeep, gTileset_Fallarbor;
