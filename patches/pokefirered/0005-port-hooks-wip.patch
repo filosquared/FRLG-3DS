@@ -213,7 +213,7 @@ index 639e329..c2fc957 100644
  u8 MapGridGetMetatileLayerTypeAt(s16 x, s16 y);
  void MapGridSetMetatileIdAt(s32, s32, u16);
 diff --git a/include/gba/defines.h b/include/gba/defines.h
-index d862f40..6227b58 100644
+index d862f40..1fc0b9d 100644
 --- a/include/gba/defines.h
 +++ b/include/gba/defines.h
 @@ -71,6 +71,8 @@ extern unsigned char VRAM_[VRAM_SIZE] __attribute__ ((aligned (4)));
@@ -225,7 +225,18 @@ index d862f40..6227b58 100644
  // text-mode BG
  #define OBJ_VRAM0      (void *)(VRAM + 0x10000)
  #define OBJ_VRAM0_SIZE 0x8000
-@@ -131,6 +133,13 @@ extern unsigned char OAM[OAM_SIZE] __attribute__ ((aligned (4)));
+@@ -123,7 +125,9 @@ extern unsigned char OAM[OAM_SIZE] __attribute__ ((aligned (4)));
+ // 64-row tilemap.
+ #define FIELD_VIEW_WIDTH  DISPLAY_WIDTH
+ #define FIELD_VIEW_HEIGHT DISPLAY_HEIGHT
+-#ifdef PLATFORM_3DS
++// Only the wide 400x240 field moves its view; a field built as a centred GBA
++// stage (FireRed's first milestone) keeps the GBA's.
++#if defined(PLATFORM_3DS) && !defined(CTR_GBA_STAGE)
+ #define FIELD_VIEW_OFFSET_X ((DISPLAY_WIDTH - 240) / 2)
+ #define FIELD_VIEW_OFFSET_Y 32
+ #else
+@@ -131,6 +135,13 @@ extern unsigned char OAM[OAM_SIZE] __attribute__ ((aligned (4)));
  #define FIELD_VIEW_OFFSET_Y 0
  #endif
  
@@ -7895,10 +7906,27 @@ index d65f99f..fb39cc0 100644
          break;
      case 11:
 diff --git a/src/save.c b/src/save.c
-index 36b960f..c067276 100644
+index 36b960f..2e1f126 100644
 --- a/src/save.c
 +++ b/src/save.c
-@@ -430,7 +430,8 @@ static u8 TryLoadSaveSlot(u16 sectorId, const struct SaveSectorLocation *locatio
+@@ -319,7 +319,15 @@ static u8 HandleReplaceSector(u16 sectorId, const struct SaveSectorLocation *loc
+ 
+     gSaveDataBufferPtr->checksum = CalculateChecksum(data, size);
+ 
+-#if REVISION >= 0xA
++#ifdef PORT_BRIDGE
++    // Preserve the two-phase signature commit without thousands of filesystem
++    // writes: the sector stays invalid until its signature byte is written
++    // (WriteSectorSignatureByte), as Emerald 3DS does.
++    ((u8 *)gSaveDataBufferPtr)[SECTOR_SIGNATURE_OFFSET] = 0xFF;
++    status = TryWriteSector(sectorNum, (u8 *)gSaveDataBufferPtr);
++    ((u8 *)gSaveDataBufferPtr)[SECTOR_SIGNATURE_OFFSET] = SECTOR_SIGNATURE & 0xFF;
++    return status;
++#elif REVISION >= 0xA
+     svc_ReplaceSector(sectorNum, (u8*)gSaveDataBufferPtr);
+     SetDamagedSectorBits(DISABLE, sectorNum);
+     return SAVE_STATUS_OK;
+@@ -430,7 +438,8 @@ static u8 TryLoadSaveSlot(u16 sectorId, const struct SaveSectorLocation *locatio
      else
      {
          status = GetSaveValidStatus(locations);
@@ -7908,6 +7936,40 @@ index 36b960f..c067276 100644
      }
  
      return status;
+@@ -448,6 +457,11 @@ static u8 CopySaveSlotData(u16 sectorId, const struct SaveSectorLocation *locati
+     {
+         ReadFlashSector(i + sector, gSaveDataBufferPtr);
+         id = gSaveDataBufferPtr->id;
++#ifdef PORTABLE
++        // An empty or damaged sector's id indexes past the table.
++        if (id >= NUM_SECTORS_PER_SLOT || gSaveDataBufferPtr->signature != SECTOR_SIGNATURE)
++            continue;
++#endif
+         if (id == 0)
+             gLastWrittenSector = i;
+ 
+@@ -484,6 +498,10 @@ static u8 GetSaveValidStatus(const struct SaveSectorLocation *locations)
+         if (gSaveDataBufferPtr->signature == SECTOR_SIGNATURE)
+         {
+             signatureValid = TRUE;
++#ifdef PORTABLE
++            if (gSaveDataBufferPtr->id >= NUM_SECTORS_PER_SLOT)
++                continue;
++#endif
+             checksum = CalculateChecksum(gSaveDataBufferPtr->data, locations[gSaveDataBufferPtr->id].size);
+             if (gSaveDataBufferPtr->checksum == checksum)
+             {
+@@ -512,6 +530,10 @@ static u8 GetSaveValidStatus(const struct SaveSectorLocation *locations)
+         if (gSaveDataBufferPtr->signature == SECTOR_SIGNATURE)
+         {
+             signatureValid = TRUE;
++#ifdef PORTABLE
++            if (gSaveDataBufferPtr->id >= NUM_SECTORS_PER_SLOT)
++                continue;
++#endif
+             checksum = CalculateChecksum(gSaveDataBufferPtr->data, locations[gSaveDataBufferPtr->id].size);
+             if (gSaveDataBufferPtr->checksum == checksum)
+             {
 diff --git a/src/scanline_effect.c b/src/scanline_effect.c
 index 7b50649..f60be75 100644
 --- a/src/scanline_effect.c
